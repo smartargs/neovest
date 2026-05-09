@@ -35,7 +35,7 @@ neoxp run
 Then deploy:
 
 ```bash
-./gradlew :deploy:run -PmainClass=io.yourorg.vesting.deploy.DeployLocal
+./gradlew :deploy:run -PmainClass=com.smartargs.vesting.deploy.DeployLocal
 ```
 
 You should see a transaction hash and, after a block, the resulting contract

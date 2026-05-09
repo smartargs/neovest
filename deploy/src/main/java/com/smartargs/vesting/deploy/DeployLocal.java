@@ -1,4 +1,4 @@
-package io.yourorg.vesting.deploy;
+package com.smartargs.vesting.deploy;
 
 /**
  * Same as {@link Deploy} but pointed at a local {@code neo-express} instance.

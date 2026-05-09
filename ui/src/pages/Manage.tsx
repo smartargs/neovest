@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LOCKS, ME, TODAY, categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
+import { CONTRACT, LOCKS, ME, TODAY, categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
 import { fmtDate, fmtNum, fmtRelative } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
@@ -9,6 +9,7 @@ import {
   IconCheck,
   IconChevronDown,
   IconClaim,
+  IconCopy,
   IconLock,
   IconStairs,
   IconTrending,
@@ -33,7 +34,17 @@ export function Manage() {
         <div>
           <h1 className="page-title">Manage locks</h1>
           <div className="page-subtitle">
-            <span className="mono">0x7f3a...e2c1</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span className="mono">0x7f3a...e2c1</span>
+              <button
+                className="icon-btn"
+                style={{ width: 22, height: 22 }}
+                aria-label="Copy contract"
+                onClick={() => navigator.clipboard?.writeText(CONTRACT)}
+              >
+                <IconCopy size={12} />
+              </button>
+            </span>
             <span className="sep">·</span>
             <span>
               Connected as{' '}

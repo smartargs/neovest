@@ -1,4 +1,4 @@
-package io.yourorg.vesting;
+package com.smartargs.vesting;
 
 import io.neow3j.devpack.ByteString;
 import io.neow3j.devpack.Hash160;

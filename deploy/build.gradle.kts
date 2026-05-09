@@ -13,7 +13,7 @@ dependencies {
 }
 
 application {
-    // Override at the CLI: ./gradlew :deploy:run -PmainClass=io.yourorg.vesting.deploy.DeployLocal
-    val cls = (project.findProperty("mainClass") as String?) ?: "io.yourorg.vesting.deploy.Deploy"
+    // Override at the CLI: ./gradlew :deploy:run -PmainClass=com.smartargs.vesting.deploy.DeployLocal
+    val cls = (project.findProperty("mainClass") as String?) ?: "com.smartargs.vesting.deploy.Deploy"
     mainClass.set(cls)
 }

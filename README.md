@@ -111,7 +111,7 @@ Contract:
 Deploy locally (neo-express):
 
 ```
-./gradlew :deploy:run -PmainClass=io.yourorg.vesting.deploy.DeployLocal
+./gradlew :deploy:run -PmainClass=com.smartargs.vesting.deploy.DeployLocal
 ```
 
 Deploy to mainnet:

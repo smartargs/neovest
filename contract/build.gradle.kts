@@ -22,7 +22,7 @@ dependencies {
 }
 
 neow3jCompiler {
-    className = "io.yourorg.vesting.VestingVault"
+    className = "com.smartargs.vesting.VestingVault"
 }
 
 tasks.test {

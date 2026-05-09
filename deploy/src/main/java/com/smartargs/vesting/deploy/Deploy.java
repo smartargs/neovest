@@ -1,4 +1,4 @@
-package io.yourorg.vesting.deploy;
+package com.smartargs.vesting.deploy;
 
 import io.neow3j.contract.ContractManagement;
 import io.neow3j.contract.NefFile;

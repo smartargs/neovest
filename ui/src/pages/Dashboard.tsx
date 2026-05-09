@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import {
   CATEGORIES,
+  CONTRACT,
   LOCKS,
   TODAY,
   TOKEN,
@@ -15,7 +16,7 @@ import { nextUnlockDate } from '@/lib/vesting-math';
 import { StatCard } from '@/components/StatCard';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
-import { IconCheck, IconChevronDown, IconChevronRight, IconSearch } from '@/components/icons';
+import { IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconSearch } from '@/components/icons';
 import { VestingTimelineChart, type TimelineRange } from '@/components/charts/VestingTimelineChart';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { UpcomingBar, type UpcomingBucket } from '@/components/charts/UpcomingBar';
@@ -125,7 +126,17 @@ export function Dashboard() {
         <div>
           <h1 className="page-title">Vesting Dashboard</h1>
           <div className="page-subtitle">
-            <span className="mono">0x7f3a...e2c1</span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span className="mono">0x7f3a...e2c1</span>
+              <button
+                className="icon-btn"
+                style={{ width: 22, height: 22 }}
+                aria-label="Copy contract"
+                onClick={() => navigator.clipboard?.writeText(CONTRACT)}
+              >
+                <IconCopy size={12} />
+              </button>
+            </span>
             <span className="sep">·</span>
             <span>Mainnet</span>
             <span className="sep">·</span>

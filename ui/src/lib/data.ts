@@ -54,8 +54,18 @@ export const CATEGORIES: Category[] = [
 /** Re-export so call sites can import everything from `@/lib/data`. */
 export { vestedAt };
 
+const KNOWN_CATEGORY_IDS: ReadonlySet<string> = new Set(CATEGORIES.map((c) => c.id));
+
+/**
+ * Category color. Built-in categories use the CSS variables defined for the
+ * theme (`--cat-team`, etc.). Custom (free-form) categories get a stable
+ * HSL color derived from the string itself, so the same custom name always
+ * lands on the same hue.
+ */
 export function categoryColor(catId: CategoryId | string): string {
-  return `var(--cat-${catId})`;
+  if (KNOWN_CATEGORY_IDS.has(catId)) return `var(--cat-${catId})`;
+  const hue = stringHue(String(catId));
+  return `hsl(${hue} 60% 55%)`;
 }
 
 export function categoryName(catId: CategoryId | string): string {
@@ -63,7 +73,20 @@ export function categoryName(catId: CategoryId | string): string {
     team: 'Team', investor: 'Investors', treasury: 'Treasury',
     public: 'Public', advisor: 'Advisors', partner: 'Partners', other: 'Other',
   };
-  return map[catId] ?? catId;
+  if (map[catId]) return map[catId];
+  // Title-case a free-form category id for display.
+  const s = String(catId).trim();
+  if (!s) return 'Uncategorized';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** Stable hash → 0..359 hue. djb2-ish; collisions are visually fine. */
+function stringHue(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h) % 360;
 }
 
 export function scheduleSummary(lock: Lock): string {

@@ -6,8 +6,9 @@
  * `lib/demo-data.ts` for screenshot purposes — see {@link isDemoVault}.
  */
 
-import { useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import * as contract from './contract';
+import type { TokenInfo } from './contract';
 import { vestedAt } from './vesting-math';
 import {
   DEMO_LOCKS,
@@ -129,6 +130,30 @@ export function useTokenInfo(tokenHash: string | undefined) {
     // Symbol/decimals are immutable; totalSupply changes rarely. Cache for 1h.
     staleTime: 60 * 60 * 1000,
   });
+}
+
+/**
+ * Batch NEP-17 metadata fetch — one query per unique token hash. Returns a
+ * lookup map `{ [hash]: TokenInfo | null }` once all in-flight requests
+ * settle. Use this when a vault may hold multiple tokens.
+ */
+export function useTokenInfos(tokenHashes: string[]): Record<string, TokenInfo | null> {
+  const unique = Array.from(new Set(tokenHashes.filter(Boolean)));
+  const queries = useQueries({
+    queries: unique.map((hash) => ({
+      queryKey: ['tokenInfo', hash],
+      queryFn: () => {
+        if (hash.toLowerCase().endsWith('a6b7c812')) return DEMO_TOKEN;
+        return contract.getTokenInfo(hash);
+      },
+      staleTime: 60 * 60 * 1000,
+    })),
+  });
+  const out: Record<string, TokenInfo | null> = {};
+  unique.forEach((hash, i) => {
+    out[hash] = (queries[i].data as TokenInfo | null | undefined) ?? null;
+  });
+  return out;
 }
 
 export function useLocksByDepositor(contractHash: string, depositor: string | undefined) {

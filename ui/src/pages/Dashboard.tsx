@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import {
   CATEGORIES,
   CONTRACT,
-  LOCKS,
   TODAY,
   TOKEN,
-  buildTimeline,
   categoryColor,
   scheduleSummary,
   vestedAt,
   type Lock,
 } from '@/lib/data';
+import { useAllLocks } from '@/lib/hooks';
+import { useVerification } from '@/lib/verification';
 import { fmtDate, fmtNum, fmtRelative } from '@/lib/format';
 import { nextUnlockDate } from '@/lib/vesting-math';
 import { StatCard } from '@/components/StatCard';
@@ -23,6 +24,13 @@ import { UpcomingBar, type UpcomingBucket } from '@/components/charts/UpcomingBa
 
 export function Dashboard() {
   const today = TODAY;
+  const { contractHash } = useParams<{ contractHash: string }>();
+  const { data: locks, isLoading } = useAllLocks(contractHash ?? '');
+  const { data: verification = 'loading' } = useVerification(contractHash ?? '');
+  // The hook returns the unified `lib/types.Lock`; structurally identical to
+  // the mock `lib/data.Lock` so we cast at the boundary instead of refactoring
+  // every chart/helper signature.
+  const items: Lock[] = (locks ?? []) as unknown as Lock[];
 
   const [range, setRange] = useState<TimelineRange>('all');
   const [activeCats, setActiveCats] = useState<Record<string, boolean>>(() => {
@@ -31,21 +39,26 @@ export function Dashboard() {
     return o;
   });
 
+  // Build a lazy timeline mirroring lib/data.ts's buildTimeline but against
+  // whatever locks the hook returned (mock or real).
   const timeline = useMemo(() => {
-    const minStart = new Date(Math.min(...LOCKS.map((l) => l.start.getTime())));
-    const maxEnd = new Date(Math.max(...LOCKS.map((l) => l.end.getTime())));
-    return { data: buildTimeline(minStart, maxEnd, 130), minStart, maxEnd };
-  }, []);
+    if (items.length === 0) {
+      return { data: emptyTimeline(), minStart: today, maxEnd: today };
+    }
+    const minStart = new Date(Math.min(...items.map((l) => l.start.getTime())));
+    const maxEnd = new Date(Math.max(...items.map((l) => l.end.getTime())));
+    return { data: buildTimelineLocal(items, minStart, maxEnd, 130), minStart, maxEnd };
+  }, [items, today]);
 
-  const totalLocked = LOCKS.reduce((s, l) => s + l.amount, 0);
-  const totalClaimed = LOCKS.reduce((s, l) => s + (l.claimed ?? 0), 0);
+  const totalLocked = items.reduce((s, l) => s + l.amount, 0);
+  const totalClaimed = items.reduce((s, l) => s + (l.claimed ?? 0), 0);
   const remaining = totalLocked - totalClaimed;
   const pctOfSupply = ((totalLocked / TOKEN.totalSupply) * 100).toFixed(1);
-  const uniqueBens = new Set(LOCKS.map((l) => l.ben)).size;
-  const largest = LOCKS.reduce<Lock>((a, b) => (a.amount > b.amount ? a : b), LOCKS[0]);
+  const uniqueBens = new Set(items.map((l) => l.ben)).size;
+  const largest = items.length === 0 ? null : items.reduce<Lock>((a, b) => (a.amount > b.amount ? a : b), items[0]);
 
   const byCat = CATEGORIES.map((c) => {
-    const total = LOCKS.filter((l) => l.cat === c.id).reduce((s, l) => s + l.amount, 0);
+    const total = items.filter((l) => l.cat === c.id).reduce((s, l) => s + l.amount, 0);
     return { id: c.id, name: c.name, value: total, color: categoryColor(c.id) };
   }).filter((c) => c.value > 0);
   const totalForCats = byCat.reduce((s, c) => s + c.value, 0);
@@ -59,7 +72,7 @@ export function Dashboard() {
       let amt = 0;
       let dom: string | null = null;
       const catTot: Record<string, number> = {};
-      LOCKS.forEach((l) => {
+      items.forEach((l) => {
         const v0 = vestedAt(l, start);
         const v1 = vestedAt(l, end);
         const delta = v1 - v0;
@@ -82,7 +95,7 @@ export function Dashboard() {
 
   const nextEvents = useMemo(() => {
     const events: { date: Date; amount: number; lock: Lock }[] = [];
-    LOCKS.forEach((l) => {
+    items.forEach((l) => {
       if (l.type === 'cliff') {
         if (l.end > today) events.push({ date: l.end, amount: l.amount, lock: l });
       } else if (l.type === 'linear') {
@@ -114,10 +127,23 @@ export function Dashboard() {
     return events.slice(0, 5);
   }, [today]);
 
-  const sortedLocks = [...LOCKS].sort((a, b) => b.amount - a.amount);
+  const sortedLocks = [...items].sort((a, b) => b.amount - a.amount);
 
   function toggleCat(id: string) {
     setActiveCats((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  if (isLoading && items.length === 0) {
+    return (
+      <div data-screen-label="Dashboard">
+        <div className="page-header">
+          <h1 className="page-title">Vesting Dashboard</h1>
+        </div>
+        <div className="card card-pad">
+          <div className="card-subtitle">Loading vault data…</div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -140,9 +166,7 @@ export function Dashboard() {
             <span className="sep">·</span>
             <span>Mainnet</span>
             <span className="sep">·</span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--success)' }}>
-              <IconCheck size={12} /> Verified
-            </span>
+            <VerificationBadge status={verification} />
           </div>
         </div>
 
@@ -174,7 +198,7 @@ export function Dashboard() {
         />
         <StatCard
           eyebrow="Locked positions"
-          value={LOCKS.length}
+          value={items.length}
           sub={
             <span>
               across <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{CATEGORIES.length}</span>{' '}
@@ -187,9 +211,9 @@ export function Dashboard() {
           value={uniqueBens}
           sub={
             <span>
-              unique addresses · largest:{' '}
+              unique addresses{largest && ' · largest: '}
               <span className="mono" style={{ color: 'var(--text-primary)' }}>
-                {fmtNum(largest.amount, { compact: true })} LTC
+                {largest && fmtNum(largest.amount, { compact: true })}{largest && ' LTC'}
               </span>
             </span>
           }
@@ -238,7 +262,7 @@ export function Dashboard() {
 
         <div className="chart-legend">
           {CATEGORIES.map((c) => {
-            const total = LOCKS.filter((l) => l.cat === c.id).reduce((s, l) => s + l.amount, 0);
+            const total = items.filter((l) => l.cat === c.id).reduce((s, l) => s + l.amount, 0);
             return (
               <div
                 key={c.id}
@@ -422,4 +446,75 @@ export function Dashboard() {
       </div>
     </div>
   );
+}
+
+// ---------- Verification badge ----------
+
+function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unverified' | 'demo' | 'unknown' }) {
+  if (status === 'verified') {
+    return (
+      <span
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--success)' }}
+        title="Deployed bytecode checksum matches the audited source bundled with this UI."
+      >
+        <IconCheck size={12} /> Verified
+      </span>
+    );
+  }
+  if (status === 'unverified') {
+    return (
+      <span
+        style={{ color: 'var(--danger)' }}
+        title="Deployed bytecode does NOT match the source this UI was built from. Do not deposit until you understand why."
+      >
+        Bytecode mismatch
+      </span>
+    );
+  }
+  if (status === 'demo') {
+    return (
+      <span style={{ color: 'var(--text-tertiary)' }} title="Demo data — no contract is deployed at this hash.">
+        Demo
+      </span>
+    );
+  }
+  if (status === 'unknown') {
+    return (
+      <span
+        style={{ color: 'var(--warning)' }}
+        title="Couldn't fetch the contract from the RPC node — verification skipped."
+      >
+        Unverified
+      </span>
+    );
+  }
+  // loading
+  return <span style={{ color: 'var(--text-tertiary)' }}>Verifying…</span>;
+}
+
+// ---------- Local helpers ----------
+
+type TimelineSeries = Record<string, { t: Date; v: number }[]>;
+
+function emptyTimeline(): TimelineSeries {
+  const out: TimelineSeries = {};
+  CATEGORIES.forEach((c) => (out[c.id] = [{ t: new Date(), v: 0 }]));
+  return out;
+}
+
+/** Mirrors lib/data.ts buildTimeline but operates on a passed-in lock array. */
+function buildTimelineLocal(locks: Lock[], start: Date, end: Date, points: number): TimelineSeries {
+  const series: TimelineSeries = {};
+  CATEGORIES.forEach((c) => (series[c.id] = []));
+  const stepMs = (end.getTime() - start.getTime()) / Math.max(1, points - 1);
+  for (let i = 0; i < points; i++) {
+    const when = new Date(start.getTime() + stepMs * i);
+    CATEGORIES.forEach((c) => {
+      const total = locks
+        .filter((l) => l.cat === c.id)
+        .reduce((s, l) => s + vestedAt(l, when), 0);
+      series[c.id].push({ t: when, v: total });
+    });
+  }
+  return series;
 }

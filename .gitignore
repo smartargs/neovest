@@ -1,0 +1,29 @@
+# Gradle
+.gradle/
+build/
+!**/src/**/build/
+!**/main/**/build/
+!**/test/**/build/
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Node / Vite
+node_modules/
+ui/dist/
+ui/.vite/
+
+# Env
+.env
+.env.local
+*.wif
+deploy.json
+
+# Claude
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+VESTING_PROJECT_PLAN.md

@@ -1,0 +1,93 @@
+import { useParams, Link } from 'react-router-dom';
+import { LOCKS, TODAY, categoryColor, scheduleSummary, vestedAt } from '@/lib/data';
+import { fmtDate, fmtNum } from '@/lib/format';
+import { CategoryPill } from '@/components/CategoryPill';
+import { ProgressSeg } from '@/components/ProgressSeg';
+import { MiniCurve } from '@/components/charts/MiniCurve';
+import { IconChevronRight } from '@/components/icons';
+
+export function LockDetail() {
+  const { lockId, contractHash } = useParams();
+  const lock = LOCKS.find((l) => String(l.id) === lockId);
+
+  if (!lock) {
+    return (
+      <div>
+        <div className="page-header">
+          <h1 className="page-title">Lock not found</h1>
+        </div>
+        <Link to={`/v/${contractHash}`} className="btn btn-secondary">← Back to dashboard</Link>
+      </div>
+    );
+  }
+
+  const vested = vestedAt(lock, TODAY);
+  const claimable = Math.max(0, vested - (lock.claimed ?? 0));
+  const pct = (vested / lock.amount) * 100;
+
+  return (
+    <div>
+      <div className="page-header">
+        <div>
+          <div style={{ fontSize: 12, color: 'var(--text-tertiary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Link to={`/v/${contractHash}`} style={{ color: 'inherit', textDecoration: 'none' }}>Dashboard</Link>
+            <IconChevronRight size={12} />
+            <span>Lock #{lock.id}</span>
+          </div>
+          <h1 className="page-title">{lock.label}</h1>
+          <div className="page-subtitle">
+            <CategoryPill catId={lock.cat} />
+            <span className="sep">·</span>
+            <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.ben}</span></span>
+            <span className="sep">·</span>
+            <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.dep}</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div className="section-grid">
+        <div className="card card-pad">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Schedule</div>
+              <div className="card-subtitle">{scheduleSummary(lock)}</div>
+            </div>
+          </div>
+          <div className="chart-wrap" style={{ height: 200, background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: 6 }}>
+            <MiniCurve width={520} height={200} lock={lock} today={TODAY} />
+          </div>
+          <dl className="dl" style={{ marginTop: 16 }}>
+            <dt>Total amount</dt><dd>{fmtNum(lock.amount)} LTC</dd>
+            <dt>Vested today</dt><dd>{fmtNum(vested)} LTC ({pct.toFixed(1)}%)</dd>
+            <dt>Claimed</dt><dd>{fmtNum(lock.claimed ?? 0)} LTC</dd>
+            <dt>Claimable</dt>
+            <dd style={{ color: claimable > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
+              {fmtNum(claimable)} LTC
+            </dd>
+            <dt>Starts</dt><dd>{fmtDate(lock.start)}</dd>
+            {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDate(lock.cliff)}</dd></>)}
+            <dt>Fully vested</dt><dd>{fmtDate(lock.end)}</dd>
+            <dt>Revocable</dt><dd>{lock.rev ? 'Yes' : 'No'}</dd>
+          </dl>
+        </div>
+
+        <div className="card card-pad">
+          <div className="card-header">
+            <div>
+              <div className="card-title">Progress</div>
+              <div className="card-subtitle">Vesting at today's date</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span className="mono" style={{ fontSize: 22, color: 'var(--text-primary)' }}>
+              {pct.toFixed(0)}%
+            </span>
+            <div style={{ flex: 1 }}>
+              <ProgressSeg pct={pct} color={categoryColor(lock.cat)} segments={20} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

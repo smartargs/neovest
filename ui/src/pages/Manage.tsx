@@ -1,8 +1,10 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
 import { useAllLocks, useOwner } from '@/lib/hooks';
+import { isDemoVault, DEMO_LOCKS } from '@/lib/demo-data';
+import { addToHistory } from '@/lib/vault-history';
 import { fmtDate, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
@@ -29,10 +31,20 @@ export function Manage() {
   const conn = useConnection();
   const qc = useQueryClient();
 
+  // Track manage visits in vault history too.
+  useEffect(() => {
+    if (contractHash) addToHistory(contractHash);
+  }, [contractHash]);
+
+  const isDemo = isDemoVault(contractHash);
   const me = conn.isConnected ? conn.address : undefined;
   // On-chain locks store dep/ben as 0x-scripthash; wallets give us N-addresses.
   // Normalize the wallet side once for filtering.
+  // The demo vault always shows pre-canned data, regardless of whether a
+  // wallet is connected — Alice acts as the beneficiary, the demo depositor
+  // as the creator.
   const meHash = useMemo(() => {
+    if (isDemo) return DEMO_LOCKS[0].ben.toLowerCase();
     if (!me) return undefined;
     if (me.startsWith('0x')) return me.toLowerCase();
     try {
@@ -40,7 +52,11 @@ export function Manage() {
     } catch {
       return undefined;
     }
-  }, [me]);
+  }, [me, isDemo]);
+  const meDepositorHash = useMemo(() => {
+    if (isDemo) return DEMO_LOCKS[0].dep.toLowerCase();
+    return meHash;
+  }, [isDemo, meHash]);
   const { data: allLocks } = useAllLocks(contractHash ?? '');
   const items: Lock[] = (allLocks ?? []) as unknown as Lock[];
 
@@ -55,8 +71,8 @@ export function Manage() {
     [items, meHash],
   );
   const myDepositor = useMemo(
-    () => (meHash ? items.filter((l) => l.dep.toLowerCase() === meHash) : []),
-    [items, meHash],
+    () => (meDepositorHash ? items.filter((l) => l.dep.toLowerCase() === meDepositorHash) : []),
+    [items, meDepositorHash],
   );
 
   /** Submit a write tx and wait for confirmation. */
@@ -478,14 +494,9 @@ function CreateLockTab({ today }: { today: Date }) {
   const [scheduleType, setScheduleType] = useState<ScheduleType>('linear');
   const [revocable, setRevocable] = useState(false);
 
-  // All controlled fields. Token + beneficiary defaults are dev placeholders
-  // for fast localnet iteration: GAS contract hash + client1's address.
-  const [tokenInput, setTokenInput] = useState(
-    import.meta.env.DEV ? '0xd2a4cff31913016155e38e474a2c06d08be276cf' : '',
-  );
-  const [beneficiaryInput, setBeneficiaryInput] = useState(
-    import.meta.env.DEV ? 'NdihqSLYTf1B1WYuzhM52MNqvCNPJKLZaz' : '',
-  );
+  // All controlled fields.
+  const [tokenInput, setTokenInput] = useState('');
+  const [beneficiaryInput, setBeneficiaryInput] = useState('');
   const [amountInput, setAmountInput] = useState('');
   const [startInput, setStartInput] = useState(toLocalDatetime(defaultStart));
   const [endInput, setEndInput] = useState(toLocalDatetime(defaultEnd));

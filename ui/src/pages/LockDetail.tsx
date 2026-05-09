@@ -1,5 +1,6 @@
 import { useParams, Link } from 'react-router-dom';
-import { LOCKS, TODAY, categoryColor, scheduleSummary, vestedAt } from '@/lib/data';
+import { TODAY, categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
+import { useLock } from '@/lib/hooks';
 import { fmtDate, fmtNum } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
@@ -7,8 +8,20 @@ import { MiniCurve } from '@/components/charts/MiniCurve';
 import { IconChevronRight } from '@/components/icons';
 
 export function LockDetail() {
-  const { lockId, contractHash } = useParams();
-  const lock = LOCKS.find((l) => String(l.id) === lockId);
+  const { lockId, contractHash } = useParams<{ lockId: string; contractHash: string }>();
+  const lockIdNum = lockId ? parseInt(lockId, 10) : undefined;
+  const { data: rawLock, isLoading } = useLock(contractHash ?? '', lockIdNum);
+  // Cast at the boundary — unified Lock from hooks is structurally identical
+  // to the mock Lock the components were written against.
+  const lock = (rawLock ?? null) as unknown as Lock | null;
+
+  if (isLoading && !lock) {
+    return (
+      <div>
+        <div className="page-header"><h1 className="page-title">Loading lock…</h1></div>
+      </div>
+    );
+  }
 
   if (!lock) {
     return (

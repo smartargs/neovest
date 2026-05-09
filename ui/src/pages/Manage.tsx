@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import { CONTRACT, LOCKS, ME, TODAY, categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
 import { fmtDate, fmtNum, fmtRelative } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
@@ -15,18 +17,79 @@ import {
   IconTrending,
 } from '@/components/icons';
 import { MiniCurve } from '@/components/charts/MiniCurve';
+import { useConnection } from '@/lib/connection';
+import { claim as txClaim, revoke as txRevoke, waitForTx } from '@/lib/transactions';
 
 type Tab = 'beneficiary' | 'depositor' | 'create';
 
 export function Manage() {
   const today = TODAY;
-  const me = ME;
+  const { contractHash } = useParams<{ contractHash: string }>();
+  const conn = useConnection();
+  const qc = useQueryClient();
+
+  const isDemo = !contractHash || contractHash === CONTRACT;
+  // Real address from wallet when connected; fall back to mock ME on the demo
+  // contract so screenshots still populate.
+  const me = conn.isConnected && conn.address
+    ? conn.address
+    : (isDemo ? ME : undefined);
 
   const [tab, setTab] = useState<Tab>('beneficiary');
+  const [pendingTx, setPendingTx] = useState<{ kind: 'claim' | 'revoke'; lockId: number } | null>(null);
+  const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
+  // For demo we still filter by mock ME / hardcoded depositor; for real we
+  // filter by the connected address (these are no-ops if the on-chain shape
+  // doesn't match — addresses are always strings).
   const myBeneficiary = LOCKS.filter((l) => l.ben === me);
-  // Treat the design's depositor address as "me too" so the demo populates the tab.
-  const myDepositor = LOCKS.filter((l) => l.dep === '0xF7c2...91ad');
+  const myDepositor = isDemo
+    ? LOCKS.filter((l) => l.dep === '0xF7c2...91ad')
+    : LOCKS.filter((l) => l.dep === me);
+
+  /** Submit a write tx and wait for confirmation. */
+  const onClaim = useCallback(async (lockId: number) => {
+    if (!conn.provider || !conn.address || !contractHash) {
+      setToast({ kind: 'err', msg: 'Connect a wallet first.' });
+      return;
+    }
+    setPendingTx({ kind: 'claim', lockId });
+    try {
+      const txHash = await txClaim(conn.provider, contractHash, conn.address, lockId);
+      setToast({ kind: 'ok', msg: 'Claim submitted, waiting for confirmation…' });
+      await waitForTx(txHash, (import.meta.env.VITE_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet');
+      setToast({ kind: 'ok', msg: 'Claim confirmed.' });
+      // Invalidate any queries that depend on this lock's state.
+      void qc.invalidateQueries({ queryKey: ['claimable', contractHash, lockId] });
+      void qc.invalidateQueries({ queryKey: ['vested', contractHash, lockId] });
+      void qc.invalidateQueries({ queryKey: ['lock', contractHash, lockId] });
+      void qc.invalidateQueries({ queryKey: ['allLocks', contractHash] });
+    } catch (e: unknown) {
+      setToast({ kind: 'err', msg: 'Claim failed: ' + extractMsg(e) });
+    } finally {
+      setPendingTx(null);
+    }
+  }, [conn, contractHash, qc]);
+
+  const onRevoke = useCallback(async (lockId: number) => {
+    if (!conn.provider || !conn.address || !contractHash) {
+      setToast({ kind: 'err', msg: 'Connect a wallet first.' });
+      return;
+    }
+    setPendingTx({ kind: 'revoke', lockId });
+    try {
+      const txHash = await txRevoke(conn.provider, contractHash, conn.address, lockId);
+      setToast({ kind: 'ok', msg: 'Revoke submitted, waiting for confirmation…' });
+      await waitForTx(txHash, (import.meta.env.VITE_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet');
+      setToast({ kind: 'ok', msg: 'Revoke confirmed.' });
+      void qc.invalidateQueries({ queryKey: ['lock', contractHash, lockId] });
+      void qc.invalidateQueries({ queryKey: ['allLocks', contractHash] });
+    } catch (e: unknown) {
+      setToast({ kind: 'err', msg: 'Revoke failed: ' + extractMsg(e) });
+    } finally {
+      setPendingTx(null);
+    }
+  }, [conn, contractHash, qc]);
 
   return (
     <div data-screen-label="Manage">
@@ -46,14 +109,14 @@ export function Manage() {
               </button>
             </span>
             <span className="sep">·</span>
-            <span>
-              Connected as{' '}
-              <span className="mono" style={{ color: 'var(--text-primary)' }}>{me}</span>
-            </span>
-            <span className="sep">·</span>
-            <a href="#" onClick={(e) => e.preventDefault()} style={{ color: 'var(--text-tertiary)', textDecoration: 'none' }}>
-              Disconnect
-            </a>
+            {me ? (
+              <span>
+                Connected as{' '}
+                <span className="mono" style={{ color: 'var(--text-primary)' }}>{me}</span>
+              </span>
+            ) : (
+              <span style={{ color: 'var(--warning)' }}>No wallet connected — read-only</span>
+            )}
           </div>
         </div>
       </div>
@@ -70,11 +133,40 @@ export function Manage() {
         </button>
       </div>
 
-      {tab === 'beneficiary' && <BeneficiaryTab locks={myBeneficiary} today={today} />}
-      {tab === 'depositor' && <DepositorTab locks={myDepositor} today={today} />}
+      {tab === 'beneficiary' && (
+        <BeneficiaryTab locks={myBeneficiary} today={today} onClaim={onClaim} pending={pendingTx} />
+      )}
+      {tab === 'depositor' && (
+        <DepositorTab locks={myDepositor} today={today} onRevoke={onRevoke} pending={pendingTx} />
+      )}
       {tab === 'create' && <CreateLockTab today={today} />}
+
+      {toast && (
+        <div className="toast-stack">
+          <div className="toast">
+            <span className="ic" style={{ color: toast.kind === 'ok' ? 'var(--success)' : 'var(--danger)' }}>
+              {toast.kind === 'ok' ? <IconCheck size={14} /> : <IconAlert size={14} />}
+            </span>
+            <div style={{ flex: 1 }}>
+              <div className="ti">{toast.msg}</div>
+            </div>
+            <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={() => setToast(null)}>
+              ×
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function extractMsg(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'object' && e !== null) {
+    const anyE = e as { description?: string; message?: string };
+    return anyE.description ?? anyE.message ?? JSON.stringify(e);
+  }
+  return String(e);
 }
 
 // ---------- Beneficiary tab ----------
@@ -84,7 +176,12 @@ interface TabProps {
   today: Date;
 }
 
-function BeneficiaryTab({ locks, today }: TabProps) {
+interface BeneficiaryTabProps extends TabProps {
+  onClaim: (lockId: number) => void | Promise<void>;
+  pending: { kind: 'claim' | 'revoke'; lockId: number } | null;
+}
+
+function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps) {
   const totalClaimable = locks.reduce((s, l) => {
     const v = vestedAt(l, today) - (l.claimed ?? 0);
     return s + Math.max(0, v);
@@ -127,13 +224,28 @@ function BeneficiaryTab({ locks, today }: TabProps) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {locks.map((l) => <BeneficiaryLockCard key={l.id} lock={l} today={today} />)}
+        {locks.map((l) => (
+          <BeneficiaryLockCard
+            key={l.id}
+            lock={l}
+            today={today}
+            onClaim={onClaim}
+            pendingClaim={pending?.kind === 'claim' && pending.lockId === l.id}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-function BeneficiaryLockCard({ lock, today }: { lock: Lock; today: Date }) {
+function BeneficiaryLockCard({
+  lock, today, onClaim, pendingClaim,
+}: {
+  lock: Lock;
+  today: Date;
+  onClaim: (lockId: number) => void | Promise<void>;
+  pendingClaim: boolean;
+}) {
   const vested = vestedAt(lock, today);
   const claimable = Math.max(0, vested - (lock.claimed ?? 0));
   const pct = (vested / lock.amount) * 100;
@@ -181,8 +293,13 @@ function BeneficiaryLockCard({ lock, today }: { lock: Lock; today: Date }) {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
         {claimable > 0 ? (
-          <button className="btn btn-primary">
-            <IconClaim size={13} /> Claim {fmtNum(claimable, { compact: true })}
+          <button
+            className={'btn btn-primary' + (pendingClaim ? ' btn-disabled' : '')}
+            onClick={() => onClaim(lock.id)}
+            disabled={pendingClaim}
+          >
+            <IconClaim size={13} />
+            {pendingClaim ? 'Claiming…' : `Claim ${fmtNum(claimable, { compact: true })}`}
           </button>
         ) : (
           <button className="btn btn-secondary btn-disabled">Not claimable</button>
@@ -195,7 +312,12 @@ function BeneficiaryLockCard({ lock, today }: { lock: Lock; today: Date }) {
 
 // ---------- Depositor tab ----------
 
-function DepositorTab({ locks, today }: TabProps) {
+interface DepositorTabProps extends TabProps {
+  onRevoke: (lockId: number) => void | Promise<void>;
+  pending: { kind: 'claim' | 'revoke'; lockId: number } | null;
+}
+
+function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
   const total = locks.reduce((s, l) => s + l.amount, 0);
   const revoked = 0;
   const visible = locks.slice(0, 10);
@@ -226,7 +348,15 @@ function DepositorTab({ locks, today }: TabProps) {
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {visible.map((l) => <DepositorLockCard key={l.id} lock={l} today={today} />)}
+        {visible.map((l) => (
+          <DepositorLockCard
+            key={l.id}
+            lock={l}
+            today={today}
+            onRevoke={onRevoke}
+            pendingRevoke={pending?.kind === 'revoke' && pending.lockId === l.id}
+          />
+        ))}
       </div>
       {locks.length > visible.length && (
         <div style={{ textAlign: 'center', marginTop: 16 }}>
@@ -237,7 +367,14 @@ function DepositorTab({ locks, today }: TabProps) {
   );
 }
 
-function DepositorLockCard({ lock, today }: { lock: Lock; today: Date }) {
+function DepositorLockCard({
+  lock, today, onRevoke, pendingRevoke,
+}: {
+  lock: Lock;
+  today: Date;
+  onRevoke: (lockId: number) => void | Promise<void>;
+  pendingRevoke: boolean;
+}) {
   const vested = vestedAt(lock, today);
   const pct = (vested / lock.amount) * 100;
 
@@ -268,8 +405,12 @@ function DepositorLockCard({ lock, today }: { lock: Lock; today: Date }) {
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
         <button className="btn btn-secondary">View detail →</button>
         {lock.rev && (
-          <button className="btn btn-danger btn-sm">
-            <IconAlert size={12} /> Revoke
+          <button
+            className={'btn btn-danger btn-sm' + (pendingRevoke ? ' btn-disabled' : '')}
+            onClick={() => onRevoke(lock.id)}
+            disabled={pendingRevoke}
+          >
+            <IconAlert size={12} /> {pendingRevoke ? 'Revoking…' : 'Revoke'}
           </button>
         )}
       </div>

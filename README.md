@@ -88,24 +88,28 @@ Neo3 net via Docker and connecting NeoLine.
 
 ## Screenshots
 
-> Replace the placeholders below with screenshots of your own deployment.
-> The demo vault at `/v/demo` is a good source for capturing populated views.
+Captured from the bundled demo vault (`/v/demo`). To regenerate after UI
+changes, run the dev server and `node ui/scripts/screenshots.mjs`.
 
-Dashboard — public read-only view of every lock in a vault, its schedule, and how much has vested.
+**Landing.** Hero, vault history with role badges, and at-a-glance feature summary.
 
-![Dashboard](https://placehold.co/1280x720/0A0B0D/F4F4F5?text=Dashboard%0AStat+cards+%E2%80%A2+stacked+timeline+%E2%80%A2+allocation+donut+%E2%80%A2+locks+table)
+![Landing](docs/screenshots/landing.png)
 
-Manage — beneficiaries claim, owners revoke. Wallet-gated.
+**Dashboard.** Public read-only view of every lock in a vault, its schedule, and how much has vested.
 
-![Manage — Beneficiary tab](https://placehold.co/1280x720/0A0B0D/F4F4F5?text=Manage+%E2%80%94+As+Beneficiary%0AClaim+individual+locks+or+claim+all)
+![Dashboard](docs/screenshots/dashboard.png)
 
-Create lock — single-transaction form with a live preview of the resulting vesting curve.
+**Manage.** Beneficiaries claim, owners revoke and create locks. Wallet-gated.
 
-![Manage — Create lock](https://placehold.co/1280x720/0A0B0D/F4F4F5?text=Manage+%E2%80%94+Create+lock%0AForm+%2B+live+vesting-curve+preview)
+![Manage](docs/screenshots/manage.png)
 
-Deploy — sign one transaction; the dashboard shows estimated cost, predicted contract hash, and a verifiable bytecode checksum.
+**Lock detail.** Per-lock schedule curve, vesting progress, and claim history.
 
-![Deploy](https://placehold.co/1280x720/0A0B0D/F4F4F5?text=Deploy+%E2%80%94+Configure+%E2%80%A2+Review+%E2%80%A2+Sign+%E2%80%A2+Done)
+![Lock detail](docs/screenshots/lock-detail.png)
+
+**Deploy.** Sign one transaction. Cost is estimated via RPC; the future contract hash is computed deterministically before signing.
+
+![Deploy](docs/screenshots/deploy.png)
 
 ## Layout
 

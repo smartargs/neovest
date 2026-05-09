@@ -10,23 +10,38 @@ any deployment.
 
 ## Why
 
-Most token-vesting solutions rely on a centralized operator that can change
-the rules later, or hide the distribution behind a custodian where outsiders
-can't see what's actually locked.
+Neo N3 doesn't have a standard, public vesting primitive. Projects launching
+tokens typically publish a vesting schedule in their tokenomics — *"team
+tokens unlock linearly over four years with a one-year cliff"* — and then
+hold those tokens in a wallet the team controls. The schedule is a promise.
+There's nothing on-chain that prevents the team from spending the supply
+the day after launch, and nothing investors or the community can verify
+without trusting the team's word.
 
-NeoVest takes the opposite stance:
+NeoVest is the missing primitive: a small, immutable smart contract that
+takes custody of the tokens and releases them on the published schedule —
+and a public dashboard that lets anyone audit it.
 
-- **No operator, no admin, no upgrade path.** Each deployed contract is
-  immutable. There is no privileged role except the **owner** set at deploy
-  time, who can deposit (create locks) and revoke revocable ones — and
-  nothing else. There is no upgrade method.
-- **Public by default.** Every lock, schedule, beneficiary, and unlock event
-  is readable by anyone with an RPC URL.
-- **Self-deployable from the browser.** Connect a wallet, click Deploy, sign
-  one transaction. No toolchain, no JVM, no CLI needed. The full source is
-  reproducibly compilable for anyone who wants to verify.
-- **Static dashboard, no backend.** No indexer, no API to keep alive. The UI
-  runs in any browser against Neo's public RPC.
+- **The promise becomes a proof.** Once tokens are deposited into the
+  vault, the on-chain schedule is the schedule. The owner cannot withdraw
+  early, change the unlock dates, redirect to a different beneficiary, or
+  upgrade the contract. The only escape hatch — `revoke` — exists only on
+  locks the owner explicitly marked revocable at creation, and even then
+  the unvested portion returns to the owner; nothing ever bypasses the
+  vested cliff for the beneficiary.
+- **Public by default.** Every lock, schedule, beneficiary, and claim is
+  readable by anyone with an RPC URL. Investors, exchange listing teams,
+  and community members can confirm at any time that the team's
+  tokenomics page matches what's actually locked on-chain.
+- **No operator on the path.** The contract holds the tokens directly.
+  Beneficiaries claim straight from the vault — no multi-sig hot wallet,
+  no custodian, no operator who could censor or delay claims.
+- **Self-deployable from the browser.** Connect a wallet, click Deploy,
+  sign one transaction. The full source is reproducibly compilable so
+  anyone who cares can verify the deployed bytecode against the audited
+  source.
+- **Static dashboard, no backend.** The UI runs in any browser against
+  Neo's public RPC. Nothing to keep alive; nothing to take offline.
 
 ## How it works
 

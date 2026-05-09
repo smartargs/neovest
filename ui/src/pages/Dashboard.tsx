@@ -4,11 +4,12 @@ import { addToHistory } from '@/lib/vault-history';
 import {
   CATEGORIES,
   categoryColor,
+  categoryName,
   scheduleSummary,
   vestedAt,
   type Lock,
 } from '@/lib/data';
-import { useAllLocks, useTokenInfo } from '@/lib/hooks';
+import { useAllLocks, useTokenInfo, useTokenInfos } from '@/lib/hooks';
 import { useVerification } from '@/lib/verification';
 import { fmtDate, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { nextUnlockDate } from '@/lib/vesting-math';
@@ -66,19 +67,42 @@ export function Dashboard() {
   const remaining = totalLocked - totalClaimed;
   const uniqueBens = new Set(items.map((l) => l.ben)).size;
   const largest = items.length === 0 ? null : items.reduce<Lock>((a, b) => (a.amount > b.amount ? a : b), items[0]);
-  const tokenSet = new Set(items.map((l) => l.token).filter(Boolean));
+  const tokenList = items.map((l) => l.token).filter((t): t is string => !!t);
+  const tokenSet = new Set(tokenList);
   const uniqueTokens = tokenSet.size;
+  // Per-token metadata (symbol, decimals, totalSupply) for every lock.
+  // Each unique token hash spawns one cached RPC trio; lookups are O(1).
+  const tokenInfos = useTokenInfos(tokenList);
+  // Decimals helper: token-specific when known, fall back to 8.
+  const decimalsFor = (hash?: string): number => {
+    if (!hash) return 8;
+    return tokenInfos[hash]?.decimals ?? 8;
+  };
   // Single-token vault → show symbol + % of supply. Multi-token → skip.
   const singleToken = uniqueTokens === 1 ? Array.from(tokenSet)[0] : undefined;
   const { data: tokenInfo } = useTokenInfo(singleToken);
+  // Default decimals for aggregate stats: the vault's single token, or 8.
+  const aggDecimals = tokenInfo?.decimals ?? 8;
   const pctOfSupply =
     tokenInfo && tokenInfo.totalSupply > 0
       ? ((totalLocked / tokenInfo.totalSupply) * 100).toFixed(2)
       : null;
 
-  const byCat = CATEGORIES.map((c) => {
-    const total = items.filter((l) => l.cat === c.id).reduce((s, l) => s + l.amount, 0);
-    return { id: c.id, name: c.name, value: total, color: categoryColor(c.id) };
+  // Every category that appears in any of this vault's locks — built-in or
+  // custom. Built-ins come first (in their canonical order), then custom
+  // categories in lexicographic order.
+  const presentCategories = useMemo<string[]>(() => {
+    const present = new Set<string>(items.map((l) => String(l.cat)));
+    const builtinPresent = CATEGORIES.map((c) => c.id).filter((id) => present.has(id));
+    const customPresent = [...present]
+      .filter((id) => !CATEGORIES.some((c) => c.id === id))
+      .sort();
+    return [...builtinPresent, ...customPresent];
+  }, [items]);
+
+  const byCat = presentCategories.map((id) => {
+    const total = items.filter((l) => l.cat === id).reduce((s, l) => s + l.amount, 0);
+    return { id, name: categoryName(id), value: total, color: categoryColor(id) };
   }).filter((c) => c.value > 0);
   const totalForCats = byCat.reduce((s, c) => s + c.value, 0);
 
@@ -172,7 +196,9 @@ export function Dashboard() {
   }, [sortedLocks, search, filterCat, filterType]);
 
   function toggleCat(id: string) {
-    setActiveCats((prev) => ({ ...prev, [id]: !prev[id] }));
+    // Treat unknown ids as active by default (custom categories don't seed
+    // the initial state), so the first click toggles them to hidden.
+    setActiveCats((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }));
   }
 
   // ---- Loading / error / empty states ----
@@ -273,7 +299,7 @@ export function Dashboard() {
       <div className="stat-grid">
         <StatCard
           eyebrow="Total locked"
-          value={fmtTokenAmount(totalLocked, tokenInfo?.decimals ?? 8)}
+          value={fmtTokenAmount(totalLocked, aggDecimals)}
           unit={tokenInfo?.symbol}
           sub={
             <span>
@@ -283,7 +309,7 @@ export function Dashboard() {
                   of supply ·{' '}
                 </>
               )}
-              {fmtTokenAmount(remaining, tokenInfo?.decimals ?? 8, { compact: true })} unclaimed
+              {fmtTokenAmount(remaining, aggDecimals, { compact: true })} unclaimed
             </span>
           }
         />
@@ -304,7 +330,7 @@ export function Dashboard() {
             <span>
               unique addresses{largest && ' · largest: '}
               <span className="mono" style={{ color: 'var(--text-primary)' }}>
-                {largest && fmtTokenAmount(largest.amount, 8, { compact: true })}
+                {largest && fmtTokenAmount(largest.amount, decimalsFor(largest.token), { compact: true })}
               </span>
             </span>
           }
@@ -336,18 +362,18 @@ export function Dashboard() {
         </div>
 
         <div className="chart-legend">
-          {CATEGORIES.map((c) => {
-            const total = items.filter((l) => l.cat === c.id).reduce((s, l) => s + l.amount, 0);
+          {presentCategories.map((id) => {
+            const total = items.filter((l) => l.cat === id).reduce((s, l) => s + l.amount, 0);
             return (
               <div
-                key={c.id}
+                key={id}
                 className="leg"
-                onClick={() => toggleCat(c.id)}
-                style={{ opacity: activeCats[c.id] ? 1 : 0.35 }}
+                onClick={() => toggleCat(id)}
+                style={{ opacity: activeCats[id] === false ? 0.35 : 1 }}
               >
-                <span className="swatch" style={{ background: categoryColor(c.id) }} />
-                <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{c.name}</span>
-                <span className="amt">{fmtTokenAmount(total, 8, { compact: true })}</span>
+                <span className="swatch" style={{ background: categoryColor(id) }} />
+                <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{categoryName(id)}</span>
+                <span className="amt">{fmtTokenAmount(total, aggDecimals, { compact: true })}</span>
               </div>
             );
           })}
@@ -378,7 +404,7 @@ export function Dashboard() {
                   Total locked
                 </div>
                 <div className="mono" style={{ fontSize: 18, fontWeight: 500, color: 'var(--text-primary)' }}>
-                  {fmtTokenAmount(totalForCats, 8, { compact: true })}
+                  {fmtTokenAmount(totalForCats, aggDecimals, { compact: true })}
                 </div>
               </div>
             </div>
@@ -387,7 +413,7 @@ export function Dashboard() {
                 <div key={c.id} className="row">
                   <span className="sw" style={{ background: c.color }} />
                   <span className="nm">{c.name}</span>
-                  <span className="am">{fmtTokenAmount(c.value, 8, { compact: true })}</span>
+                  <span className="am">{fmtTokenAmount(c.value, aggDecimals, { compact: true })}</span>
                   <span className="pc">{((c.value / totalForCats) * 100).toFixed(1)}%</span>
                 </div>
               ))}
@@ -425,7 +451,7 @@ export function Dashboard() {
                     {fmtDate(e.date, { short: true })}, {e.date.getUTCFullYear()}
                   </span>
                   <span className="am">
-                    {fmtTokenAmount(e.amount, 8, { compact: true })}
+                    {fmtTokenAmount(e.amount, decimalsFor(e.lock.token), { compact: true })}
                   </span>
                   <CategoryPill catId={e.lock.cat} />
                 </div>
@@ -449,8 +475,8 @@ export function Dashboard() {
           </div>
           <select className="select" value={filterCat} onChange={(e) => setFilterCat(e.target.value)}>
             <option value="all">All categories</option>
-            {CATEGORIES.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
+            {presentCategories.map((id) => (
+              <option key={id} value={id}>{categoryName(id)}</option>
             ))}
           </select>
           <select className="select" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
@@ -496,7 +522,7 @@ export function Dashboard() {
                     </td>
                     <td className="num">
                       <div className="amount-cell" style={{ textAlign: 'right' }}>
-                        <span className="v">{fmtTokenAmount(l.amount)}</span>
+                        <span className="v">{fmtTokenAmount(l.amount, decimalsFor(l.token))}</span>
                       </div>
                     </td>
                     <td>
@@ -570,7 +596,7 @@ function DashboardSkeleton() {
 
 // ---------- Verification badge ----------
 
-function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unverified' | 'unknown' }) {
+function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unverified' | 'demo' | 'unknown' }) {
   if (status === 'verified') {
     return (
       <span
@@ -588,6 +614,13 @@ function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unver
         title="Deployed bytecode does NOT match the source this UI was built from. Do not deposit until you understand why."
       >
         Bytecode mismatch
+      </span>
+    );
+  }
+  if (status === 'demo') {
+    return (
+      <span style={{ color: 'var(--text-tertiary)' }} title="Canned demo dataset — not a real on-chain contract.">
+        Demo data
       </span>
     );
   }

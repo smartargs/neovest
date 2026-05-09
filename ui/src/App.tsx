@@ -1,13 +1,17 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Route, Routes, useParams } from 'react-router-dom';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
 import { NetworkBanner } from './components/NetworkBanner';
 import { Landing } from './pages/Landing';
 import { Dashboard } from './pages/Dashboard';
-import { Manage } from './pages/Manage';
-import { LockDetail } from './pages/LockDetail';
-import { Deploy } from './pages/Deploy';
+
+// Wallet-heavy pages are split into separate chunks. They import the
+// dappkit / NEF artifacts / WalletConnect path, all of which the read-only
+// dashboard doesn't need.
+const Manage = lazy(() => import('./pages/Manage').then((m) => ({ default: m.Manage })));
+const LockDetail = lazy(() => import('./pages/LockDetail').then((m) => ({ default: m.LockDetail })));
+const Deploy = lazy(() => import('./pages/Deploy').then((m) => ({ default: m.Deploy })));
 
 type Theme = 'dark' | 'light';
 
@@ -29,13 +33,15 @@ function App() {
   return (
     <div className="app">
       <NetworkBanner />
-      <Routes>
-        <Route path="/" element={<Shell theme={theme} toggleTheme={toggleTheme}><Landing /></Shell>} />
-        <Route path="/deploy" element={<Shell theme={theme} toggleTheme={toggleTheme}><Deploy /></Shell>} />
-        <Route path="/v/:contractHash" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><Dashboard /></VaultShell>} />
-        <Route path="/v/:contractHash/manage" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><Manage /></VaultShell>} />
-        <Route path="/v/:contractHash/lock/:lockId" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><LockDetail /></VaultShell>} />
-      </Routes>
+      <Suspense fallback={<RouteSkeleton />}>
+        <Routes>
+          <Route path="/" element={<Shell theme={theme} toggleTheme={toggleTheme}><Landing /></Shell>} />
+          <Route path="/deploy" element={<Shell theme={theme} toggleTheme={toggleTheme}><Deploy /></Shell>} />
+          <Route path="/v/:contractHash" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><Dashboard /></VaultShell>} />
+          <Route path="/v/:contractHash/manage" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><Manage /></VaultShell>} />
+          <Route path="/v/:contractHash/lock/:lockId" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><LockDetail /></VaultShell>} />
+        </Routes>
+      </Suspense>
     </div>
   );
 }
@@ -64,6 +70,23 @@ function VaultShell({ theme, toggleTheme, children }: ShellProps) {
       <main className="page">{children}</main>
       <Footer />
     </>
+  );
+}
+
+/** Minimal placeholder shown while a lazy-loaded route's chunk is fetched. */
+function RouteSkeleton() {
+  return (
+    <main className="page" style={{ minHeight: '40vh' }}>
+      <div
+        style={{
+          height: 240,
+          background: 'var(--bg-tertiary)',
+          borderRadius: 8,
+          animation: 'pulse 1.6s ease-in-out infinite',
+        }}
+      />
+      <style>{`@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.55 } }`}</style>
+    </main>
   );
 }
 

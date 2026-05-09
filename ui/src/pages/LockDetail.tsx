@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
-import { useLock } from '@/lib/hooks';
+import { useLock, useTokenInfo } from '@/lib/hooks';
 import { fmtDate, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
@@ -16,6 +16,9 @@ export function LockDetail() {
   // identical to the display Lock the components were written against.
   const lock = (rawLock ?? null) as unknown as Lock | null;
   const today = useMemo(() => new Date(), []);
+  const { data: tokenInfo } = useTokenInfo(lock?.token);
+  const tokenDec = tokenInfo?.decimals ?? 8;
+  const tokenSym = tokenInfo?.symbol;
 
   if (isLoading && !lock) {
     return (
@@ -72,13 +75,17 @@ export function LockDetail() {
             <MiniCurve width={520} height={200} lock={lock} today={today} />
           </div>
           <dl className="dl" style={{ marginTop: 16 }}>
-            <dt>Token</dt><dd className="mono">{lock.token ? shortHash(lock.token) : '—'}</dd>
-            <dt>Total amount</dt><dd>{fmtTokenAmount(lock.amount)}</dd>
-            <dt>Vested today</dt><dd>{fmtTokenAmount(vested)} ({pct.toFixed(1)}%)</dd>
-            <dt>Claimed</dt><dd>{fmtTokenAmount(lock.claimed ?? 0)}</dd>
+            <dt>Token</dt>
+            <dd className="mono">
+              {tokenSym ? <strong>{tokenSym}</strong> : null}{' '}
+              {lock.token ? shortHash(lock.token) : '—'}
+            </dd>
+            <dt>Total amount</dt><dd>{fmtTokenAmount(lock.amount, tokenDec)}{tokenSym ? ` ${tokenSym}` : ''}</dd>
+            <dt>Vested today</dt><dd>{fmtTokenAmount(vested, tokenDec)} ({pct.toFixed(1)}%)</dd>
+            <dt>Claimed</dt><dd>{fmtTokenAmount(lock.claimed ?? 0, tokenDec)}</dd>
             <dt>Claimable</dt>
             <dd style={{ color: claimable > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
-              {fmtTokenAmount(claimable)}
+              {fmtTokenAmount(claimable, tokenDec)}
             </dd>
             <dt>Starts</dt><dd>{fmtDate(lock.start)}</dd>
             {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDate(lock.cliff)}</dd></>)}

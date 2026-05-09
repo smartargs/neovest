@@ -14,6 +14,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { getContractChecksum } from './contract';
+import { isDemoVault } from './demo-data';
 import { EXPECTED_NEF_CHECKSUM } from './nef-checksum';
 
 export { EXPECTED_NEF_CHECKSUM };
@@ -22,12 +23,14 @@ export type VerificationStatus =
   | 'loading'
   | 'verified'    // RPC checksum matches the expected value
   | 'unverified'  // RPC checksum differs — contract source isn't the bundled source
+  | 'demo'        // canned demo dataset, not a deployed contract
   | 'unknown';    // RPC failed or contract not found
 
 export function useVerification(contractHash: string) {
   return useQuery<VerificationStatus>({
     queryKey: ['verification', contractHash],
     queryFn: async () => {
+      if (isDemoVault(contractHash)) return 'demo';
       const checksum = await getContractChecksum(contractHash);
       if (checksum == null) return 'unknown';
       return checksum === EXPECTED_NEF_CHECKSUM ? 'verified' : 'unverified';

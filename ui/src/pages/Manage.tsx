@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
-import { useAllLocks, useOwner } from '@/lib/hooks';
+import { useAllLocks, useOwner, useTokenInfo } from '@/lib/hooks';
 import { isDemoVault, DEMO_LOCKS } from '@/lib/demo-data';
 import { addToHistory } from '@/lib/vault-history';
 import { fmtDate, fmtRelative, fmtTokenAmount } from '@/lib/format';
@@ -287,6 +287,9 @@ function BeneficiaryLockCard({
   pendingClaim: boolean;
 }) {
   const { contractHash } = useParams<{ contractHash: string }>();
+  const { data: tokenInfo } = useTokenInfo(lock.token);
+  const dec = tokenInfo?.decimals ?? 8;
+  const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
   const vested = vestedAt(lock, today);
   const claimable = Math.max(0, vested - (lock.claimed ?? 0));
   const pct = (vested / lock.amount) * 100;
@@ -305,7 +308,7 @@ function BeneficiaryLockCard({
           <span style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
         </div>
         <div className="lock-card-amount">
-          {fmtTokenAmount(lock.amount)}
+          {fmtTokenAmount(lock.amount, dec)}{sym}
         </div>
         <div className="lock-card-meta">
           {scheduleSummary(lock)} · {fmtDate(lock.start)} → {fmtDate(lock.end)}
@@ -318,7 +321,7 @@ function BeneficiaryLockCard({
           {claimable > 0 ? (
             <span style={{ color: 'var(--success)' }}>
               · Claimable:{' '}
-              <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(claimable, 8, { compact: true })}</span>
+              <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(claimable, dec, { compact: true })}{sym}</span>
             </span>
           ) : isLocked && lock.cliff ? (
             <span>
@@ -340,7 +343,7 @@ function BeneficiaryLockCard({
             disabled={pendingClaim}
           >
             <IconClaim size={13} />
-            {pendingClaim ? 'Claiming…' : `Claim ${fmtTokenAmount(claimable, 8, { compact: true })}`}
+            {pendingClaim ? 'Claiming…' : `Claim ${fmtTokenAmount(claimable, dec, { compact: true })}`}
           </button>
         ) : (
           <button className="btn btn-secondary btn-disabled">Not claimable</button>
@@ -419,6 +422,9 @@ function DepositorLockCard({
   pendingRevoke: boolean;
 }) {
   const { contractHash } = useParams<{ contractHash: string }>();
+  const { data: tokenInfo } = useTokenInfo(lock.token);
+  const dec = tokenInfo?.decimals ?? 8;
+  const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
   const vested = vestedAt(lock, today);
   const pct = (vested / lock.amount) * 100;
 
@@ -433,7 +439,7 @@ function DepositorLockCard({
           <span style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
         </div>
         <div className="lock-card-amount">
-          {fmtTokenAmount(lock.amount)}
+          {fmtTokenAmount(lock.amount, dec)}{sym}
         </div>
         <div className="lock-card-meta">
           {scheduleSummary(lock)} · Created {fmtDate(lock.start)} · Revocable:{' '}
@@ -778,18 +784,27 @@ function CreateLockTab({ today }: { today: Date }) {
 
           <div className="field">
             <label>Category</label>
-            <select
-              className="select"
+            <input
+              className="input"
+              list="neovest-category-suggestions"
               value={categoryInput}
-              onChange={(e) => setCategoryInput(e.target.value)}
-            >
-              <option value="team">Team</option>
-              <option value="investor">Investors</option>
-              <option value="treasury">Treasury</option>
-              <option value="public">Public</option>
-              <option value="advisor">Advisors</option>
-              <option value="partner">Partners</option>
-            </select>
+              onChange={(e) => setCategoryInput(e.target.value.trim().toLowerCase())}
+              maxLength={32}
+              placeholder="team, investor, treasury, …"
+              spellCheck={false}
+            />
+            <datalist id="neovest-category-suggestions">
+              <option value="team" />
+              <option value="investor" />
+              <option value="treasury" />
+              <option value="public" />
+              <option value="advisor" />
+              <option value="partner" />
+            </datalist>
+            <span className="hint">
+              Free-form. The six built-in categories have themed colors;
+              custom names get a stable color from a hash of the string.
+            </span>
           </div>
 
           <div className="field">

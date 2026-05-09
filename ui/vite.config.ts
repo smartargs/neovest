@@ -52,6 +52,59 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // The wallet stack (@reown/appkit + @walletconnect/* + wagmi/viem)
+        // and the Neo crypto stack (@cityofzion/*) each weigh more than a
+        // megabyte on their own. Without splitting them out, Vite drops
+        // everything into one >1.5 MB chunk that trips the CI bundle-size
+        // budget. Keep the React runtime in its own chunk so it can cache
+        // independently of app code.
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('@reown') || id.includes('@walletconnect')) {
+            return 'wallet-connect';
+          }
+          if (id.includes('wagmi') || id.includes('viem')) {
+            return 'wallet-evm';
+          }
+          if (id.includes('@cityofzion/neon-core')) {
+            return 'neon-core';
+          }
+          if (id.includes('@cityofzion')) {
+            return 'neon';
+          }
+          // The crypto polyfills pulled in by neon-core (elliptic, bn.js,
+          // ripemd160, scrypt, sha.js, hash-base, …) add up to several
+          // hundred KB. Split them out so neon-core itself stays small.
+          if (
+            id.includes('/elliptic/') ||
+            id.includes('/bn.js/') ||
+            id.includes('/ripemd160/') ||
+            id.includes('/scrypt') ||
+            id.includes('/sha.js/') ||
+            id.includes('/hash-base/') ||
+            id.includes('/create-hash/') ||
+            id.includes('/create-hmac/') ||
+            id.includes('/asn1.js/') ||
+            id.includes('/readable-stream/')
+          ) {
+            return 'crypto-vendor';
+          }
+          if (
+            id.includes('/react/') ||
+            id.includes('/react-dom/') ||
+            id.includes('/react-router') ||
+            id.includes('/scheduler/')
+          ) {
+            return 'react-vendor';
+          }
+          return undefined;
+        },
+      },
+    },
+  },
   // Dev-only same-origin proxy for the local Neo N3 chain. neo-cli's RpcServer
   // doesn't emit CORS headers, so browsers reject direct fetches from a Vite
   // dev origin (5173/5175) to localhost:10332. Routing through `/__rpc` keeps

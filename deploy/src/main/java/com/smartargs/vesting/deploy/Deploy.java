@@ -4,14 +4,19 @@ import io.neow3j.contract.ContractManagement;
 import io.neow3j.contract.NefFile;
 import io.neow3j.contract.SmartContract;
 import io.neow3j.protocol.Neow3j;
-import io.neow3j.protocol.http.HttpService;
+import io.neow3j.protocol.core.response.NeoApplicationLog;
 import io.neow3j.protocol.core.response.NeoSendRawTransaction;
+import io.neow3j.protocol.http.HttpService;
 import io.neow3j.transaction.AccountSigner;
 import io.neow3j.transaction.Transaction;
+import io.neow3j.types.Hash160;
 import io.neow3j.types.Hash256;
+import io.neow3j.types.NeoVMStateType;
+import io.neow3j.utils.Await;
 import io.neow3j.wallet.Account;
+import io.neow3j.protocol.ObjectMapperFactory;
+import io.neow3j.protocol.core.response.ContractManifest;
 
-import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -32,11 +37,9 @@ import java.nio.file.Paths;
  *   <li>{@code contract/build/neow3j/VestingVault.manifest.json}</li>
  * </ul>
  *
- * <p>Outputs the deployment transaction hash, then polls for inclusion and
- * prints the resulting contract hash.
- *
- * <p>SCAFFOLD — the manifest parsing call below is shaped per neow3j's API
- * but should be reviewed against the pinned neow3j version before production use.
+ * <p>Submits the deployment transaction, waits for inclusion via
+ * {@link Await#waitUntilTransactionIsExecuted}, verifies the application log
+ * didn't FAULT, then prints the deterministically-derived contract hash.
  */
 public final class Deploy {
 
@@ -47,7 +50,15 @@ public final class Deploy {
             System.err.println("DEPLOYER_WIF is required. Refusing to deploy without a key.");
             System.exit(2);
         }
+        run(rpcUrl, wif);
+    }
 
+    /**
+     * Compile-product → on-chain deployment, with full receipt: tx hash,
+     * application-log state check, deterministic contract-hash derivation.
+     * Public so {@link DeployLocal} can call it with neo-express defaults.
+     */
+    public static Hash160 run(String rpcUrl, String wif) throws Throwable {
         Neow3j neow3j = Neow3j.build(new HttpService(rpcUrl));
         Account deployer = Account.fromWIF(wif);
         System.out.println("Deployer: " + deployer.getAddress());
@@ -61,10 +72,11 @@ public final class Deploy {
         }
 
         NefFile nef = NefFile.readFromFile(nefPath.toFile());
-        String manifestJson = Files.readString(manifestPath);
+        ContractManifest manifest = ObjectMapperFactory.getObjectMapper()
+                .readValue(Files.readAllBytes(manifestPath), ContractManifest.class);
 
         ContractManagement mgmt = new ContractManagement(neow3j);
-        Transaction tx = mgmt.deploy(nef, manifestJson)
+        Transaction tx = mgmt.deploy(nef, manifest)
                 .signers(AccountSigner.calledByEntry(deployer))
                 .sign();
 
@@ -75,10 +87,28 @@ public final class Deploy {
         Hash256 txHash = sent.getSendRawTransaction().getHash();
         System.out.println("Deploy tx: " + txHash);
 
-        // Wait for inclusion. neow3j provides an Await helper; if absent for the pinned
-        // version, poll getTransactionHeight in a small loop here.
-        // TODO(scaffold): poll for tx height, then resolve and print the deployed contract hash.
-        System.out.println("Submitted. Look up the transaction on a block explorer to find the contract hash.");
+        // Wait for inclusion in a block.
+        Await.waitUntilTransactionIsExecuted(txHash, neow3j);
+
+        // Verify it didn't FAULT.
+        NeoApplicationLog.Execution exec = neow3j.getApplicationLog(txHash).send()
+                .getApplicationLog().getExecutions().get(0);
+        if (exec.getState() != NeoVMStateType.HALT) {
+            throw new RuntimeException("Deploy reverted: " + exec.getException());
+        }
+
+        // The contract hash is deterministic: it's derived from the deployer's
+        // script hash + the NEF checksum + the contract name. Computing it
+        // locally avoids a second RPC round-trip.
+        Hash160 contractHash = SmartContract.calcContractHash(
+                deployer.getScriptHash(),
+                nef.getCheckSumAsInteger(),
+                manifest.getName());
+
+        System.out.println("Contract: " + contractHash);
+        System.out.println();
+        System.out.println("Point the UI at: /v/" + contractHash);
+        return contractHash;
     }
 
     private Deploy() {}

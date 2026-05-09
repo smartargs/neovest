@@ -14,6 +14,7 @@ import io.neow3j.devpack.annotations.Permission;
 import io.neow3j.devpack.annotations.Safe;
 import io.neow3j.devpack.constants.CallFlags;
 import io.neow3j.devpack.contracts.ContractManagement;
+import io.neow3j.devpack.contracts.StdLib;
 import io.neow3j.devpack.events.Event3Args;
 
 /**
@@ -24,8 +25,9 @@ import io.neow3j.devpack.events.Event3Args;
  * receiver is a contract), totalSupply, symbol, decimals, and a test-only
  * {@code mint} helper.
  *
- * <p>Not deployed to any production network. Lives here purely as a counterparty
- * for {@link com.smartargs.vesting.VestingVault} during JUnit runs.
+ * <p>Also exposes {@code serializeArray} — a thin wrapper over
+ * {@code StdLib.serialize} — so tests can build a stepped-tranche payload
+ * byte-for-byte identical to what the vault will deserialize on its side.
  */
 @DisplayName("TestNep17Token")
 @Permission(contract = "*", methods = "*")
@@ -39,6 +41,7 @@ public class TestNep17Token {
     private static final StorageMap balances = new StorageMap(ctx, PREFIX_BALANCES);
 
     private static final ContractManagement mgmt = new ContractManagement();
+    private static final StdLib stdLib = new StdLib();
 
     @DisplayName("Transfer")
     private static Event3Args<Hash160, Hash160, Integer> onTransfer;
@@ -116,6 +119,17 @@ public class TestNep17Token {
         Storage.put(ctx, KEY_TOTAL, prev + amount);
 
         onTransfer.fire(Hash160.zero(), to, amount);
+    }
+
+    /**
+     * Test helper: serialize an arbitrary array using the same StdLib used
+     * by the vault. Tests call this to build the stepped-tranche payload
+     * (an array of [timestamp, amount] pairs) in a format the vault's
+     * {@code stdLib.deserialize} will accept verbatim.
+     */
+    @Safe
+    public static ByteString serializeArray(Object[] arr) {
+        return stdLib.serialize(arr);
     }
 
     private static int balanceInternal(Hash160 account) {

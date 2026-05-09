@@ -36,13 +36,35 @@ The contract is one party (the **depositor**) handing tokens to another (the
 ## Audit status
 
 **Unaudited.** This is open-source software with no warranty (see `LICENSE`).
+However, the contract has been **reviewed against the public Neo N3 audit
+corpus** at [`smartargs/neo-sc-audits`](https://github.com/smartargs/neo-sc-audits)
+(Lyrebird, GhostMarket, FTW Overlord, GrantShares). Findings applied:
+
+- **Re-entrancy guard.** `claim` and `revoke` reject any invocation with
+  `Runtime.getInvocationCounter() != 1` — a malicious token cannot re-enter
+  the vault during the outbound `transfer` callback.
+- **Permission scope narrowed.** The contract may only call `transfer` on
+  external contracts, not arbitrary methods.
+- **Mint-as-deposit blocked.** `onPayment` rejects `from == null` (which
+  would create an unrevokable lock) and reuses `Hash160.isValid` on every
+  hash-typed input.
+- **Stepped tranches bounded** to 64 entries to cap the per-claim GAS cost
+  a depositor can inflict on a beneficiary.
+- **CEI ordering everywhere.** State persisted before any cross-contract
+  call (verified line-by-line in `claim`, `revoke`, `onPayment`).
+- **`Helper.abort(message)` everywhere.** All aborts carry a `"VV: …"`
+  reason string so wallets can surface useful failure messages.
+- **`Contract.call` return value verified.** Both `null` and `false` are
+  treated as failure and abort.
+
 Recommended posture before any non-trivial mainnet use:
 
 1. Review the contract source.
 2. Run the test suite (`./gradlew :contract:test`) and read each test.
 3. Deploy to testnet and exercise every path with realistic amounts.
 4. Have someone independent re-do steps 1–3.
-5. Keep initial mainnet deposits small until the contract has lived through
+5. Commission a paid audit before any mainnet deposit beyond test-scale.
+6. Keep initial mainnet deposits small until the contract has lived through
    real activity for a sustained period.
 
 ## Operational guidance

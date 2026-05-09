@@ -1,35 +1,26 @@
 package com.smartargs.vesting.deploy;
 
 /**
- * Same as {@link Deploy} but pointed at a local {@code neo-express} instance.
+ * Local-network counterpart to {@link Deploy}. Targets a running
+ * {@code neo-express} instance for end-to-end smoke testing before mainnet.
  *
- * <p>Defaults:
+ * <p>Defaults (override via env vars):
  * <ul>
- *   <li>RPC URL: {@code http://localhost:50012}</li>
- *   <li>Deployer WIF: read from {@code DEPLOYER_WIF} or, if absent, the canonical
- *       {@code neo-express} default genesis account.</li>
+ *   <li>{@code NEO_RPC} → {@code http://localhost:50012}</li>
+ *   <li>{@code DEPLOYER_WIF} → the canonical {@code neo-express} default
+ *       genesis account WIF (publicly known, used only on local chains).</li>
  * </ul>
- *
- * <p>Use this for end-to-end smoke testing before mainnet deployment.
- *
- * <p>SCAFFOLD — delegates to {@link Deploy#main} after rewriting env vars.
  */
 public final class DeployLocal {
 
     private static final String DEFAULT_RPC = "http://localhost:50012";
-    // Conventional neo-express default account WIF — public, used only locally.
+    /** Public, well-known neo-express default genesis WIF. Local use only. */
     private static final String DEFAULT_LOCAL_WIF = "KxDgvEKzgSBPPfuVfw67oPQBSjidEiqTHURKSDL1R7yGaGYAeYnr";
 
     public static void main(String[] args) throws Throwable {
-        if (System.getenv("NEO_RPC") == null) {
-            // System.setenv is not exposed in standard Java; document the override instead.
-            System.out.println("Tip: set NEO_RPC=" + DEFAULT_RPC + " for neo-express local deploys.");
-        }
-        if (System.getenv("DEPLOYER_WIF") == null) {
-            System.out.println("Tip: set DEPLOYER_WIF=<wif> (default neo-express genesis: "
-                    + DEFAULT_LOCAL_WIF + ")");
-        }
-        Deploy.main(args);
+        String rpcUrl = System.getenv().getOrDefault("NEO_RPC", DEFAULT_RPC);
+        String wif    = System.getenv().getOrDefault("DEPLOYER_WIF", DEFAULT_LOCAL_WIF);
+        Deploy.run(rpcUrl, wif);
     }
 
     private DeployLocal() {}

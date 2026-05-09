@@ -1,4 +1,4 @@
-import { vestedAt } from '@/lib/data';
+import { categoryColor, vestedAt } from '@/lib/data';
 import type { ScheduleInput } from '@/lib/vesting-math';
 
 interface MiniCurveProps {
@@ -41,7 +41,7 @@ export function MiniCurve({ width = 280, height = 110, lock, today }: MiniCurveP
     d += (i === 0 ? 'M ' : ' L ') + xS(p.t) + ',' + yS(p.v);
   });
   const fill = d + ` L ${padL + innerW},${padT + innerH} L ${padL},${padT + innerH} Z`;
-  const c = `var(--cat-${lock.cat ?? 'team'})`;
+  const c = categoryColor(lock.cat ?? 'team');
 
   return (
     <svg className="chart-svg" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">

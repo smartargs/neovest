@@ -1,10 +1,11 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
 import { useAllLocks, useOwner, useTokenInfo } from '@/lib/hooks';
 import { isDemoVault, DEMO_LOCKS } from '@/lib/demo-data';
 import { addToHistory } from '@/lib/vault-history';
+import { generateEqualTranches, serializeTranchesToBase64 } from '@/lib/tranche-codec';
 import { fmtDate, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
@@ -493,8 +494,15 @@ function CreateLockTab({ today }: { today: Date }) {
 
   const ownerMismatch = !!owner && !!meHash && owner.toLowerCase() !== meHash;
 
-  // Default start = +1 minute (sufficient buffer past the next block).
-  const defaultStart = useMemo(() => addSeconds(today, 60), [today]);
+  // Default start = same time tomorrow (rounded to the minute). Far enough
+  // ahead that users typically don't need to fiddle, and avoids accidentally
+  // submitting "now" which the contract would reject.
+  const defaultStart = useMemo(() => {
+    const d = new Date(today);
+    d.setDate(d.getDate() + 1);
+    d.setSeconds(0, 0);
+    return d;
+  }, [today]);
   const defaultEnd = useMemo(() => addSeconds(defaultStart, 60 * 60 * 24 * 365), [defaultStart]);
 
   const [scheduleType, setScheduleType] = useState<ScheduleType>('linear');
@@ -507,6 +515,7 @@ function CreateLockTab({ today }: { today: Date }) {
   const [startInput, setStartInput] = useState(toLocalDatetime(defaultStart));
   const [endInput, setEndInput] = useState(toLocalDatetime(defaultEnd));
   const [cliffInput, setCliffInput] = useState('');
+  const [stepsInput, setStepsInput] = useState('4');
   const [categoryInput, setCategoryInput] = useState<string>('team');
   const [noteInput, setNoteInput] = useState('');
   const [decimals] = useState(8); // assumed; production UI would fetch via NEP-17
@@ -518,10 +527,10 @@ function CreateLockTab({ today }: { today: Date }) {
   // Parse + validate.
   const parsed = useMemo(() => parseLockForm({
     tokenInput, beneficiaryInput, amountInput,
-    startInput, endInput, cliffInput,
+    startInput, endInput, cliffInput, stepsInput,
     categoryInput, noteInput,
     scheduleType, revocable, decimals,
-  }), [tokenInput, beneficiaryInput, amountInput, startInput, endInput, cliffInput,
+  }), [tokenInput, beneficiaryInput, amountInput, startInput, endInput, cliffInput, stepsInput,
        categoryInput, noteInput, scheduleType, revocable, decimals]);
 
   const previewLock: Lock = useMemo(() => ({
@@ -531,13 +540,14 @@ function CreateLockTab({ today }: { today: Date }) {
     start: parsed.ok ? new Date(parsed.startSec * 1000) : defaultStart,
     end:   parsed.ok ? new Date(parsed.endSec * 1000)   : defaultEnd,
     cliff: parsed.ok && parsed.cliffSec ? new Date(parsed.cliffSec * 1000) : undefined,
+    steps: scheduleType === 'stepped' ? Number(stepsInput) || 4 : undefined,
     amount: parsed.ok ? Number(parsed.amountRaw) : 1_000_000_00,
     rev: revocable,
     ben: beneficiaryInput || '0xA1b3…3Bf2',
     dep: conn.address ?? '',
     label: noteInput,
     claimed: 0,
-  } as Lock), [categoryInput, scheduleType, parsed, defaultStart, defaultEnd, revocable, beneficiaryInput, conn.address, noteInput]);
+  } as Lock), [categoryInput, scheduleType, parsed, defaultStart, defaultEnd, revocable, beneficiaryInput, conn.address, noteInput, stepsInput]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -566,6 +576,7 @@ function CreateLockTab({ today }: { today: Date }) {
         startTime: parsed.startSec,
         endTime: parsed.endSec,
         cliffTime: parsed.cliffSec ?? 0,
+        trancheBlobBase64: parsed.trancheBlobBase64,
         category: categoryInput,
         note: noteInput,
         revocable,
@@ -729,20 +740,22 @@ function CreateLockTab({ today }: { today: Date }) {
                 <div className="desc">Vest continuously between two dates, optional cliff.</div>
               </div>
               <div
-                className={'radio-card btn-disabled'}
-                title="Stepped vesting requires off-chain tranche serialization — coming soon."
-                style={{ cursor: 'not-allowed', opacity: 0.55 }}
+                className={'radio-card ' + (scheduleType === 'stepped' ? 'active' : '')}
+                onClick={() => setScheduleType('stepped')}
               >
                 <IconStairs className="ic" size={16} />
-                <div className="name">Stepped (soon)</div>
-                <div className="desc">Unlock equal tranches at fixed intervals.</div>
+                <div className="name">Stepped</div>
+                <div className="desc">Equal tranches at evenly-spaced timestamps.</div>
               </div>
             </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div className="field">
-              <label>{scheduleType === 'cliff' ? 'Unlock date' : 'Start date'}</label>
+              <label>
+                {scheduleType === 'cliff' ? 'Unlock date' :
+                 scheduleType === 'stepped' ? 'First unlock' : 'Start date'}
+              </label>
               <input
                 className="input mono"
                 type="datetime-local"
@@ -751,9 +764,9 @@ function CreateLockTab({ today }: { today: Date }) {
                 onChange={(e) => setStartInput(e.target.value)}
               />
             </div>
-            {scheduleType === 'linear' && (
+            {(scheduleType === 'linear' || scheduleType === 'stepped') && (
               <div className="field">
-                <label>End date</label>
+                <label>{scheduleType === 'stepped' ? 'Last unlock' : 'End date'}</label>
                 <input
                   className="input mono"
                   type="datetime-local"
@@ -764,6 +777,25 @@ function CreateLockTab({ today }: { today: Date }) {
               </div>
             )}
           </div>
+
+          {scheduleType === 'stepped' && (
+            <div className="field">
+              <label>Number of tranches</label>
+              <input
+                className="input"
+                type="number"
+                min={1}
+                max={64}
+                step={1}
+                value={stepsInput}
+                onChange={(e) => setStepsInput(e.target.value)}
+              />
+              <span className="hint">
+                Equal-sized tranches (1–64). The total amount divides evenly across them;
+                any rounding remainder folds into the last tranche.
+              </span>
+            </div>
+          )}
 
           {scheduleType === 'linear' && (
             <div className="field">
@@ -784,27 +816,13 @@ function CreateLockTab({ today }: { today: Date }) {
 
           <div className="field">
             <label>Category</label>
-            <input
-              className="input"
-              list="neovest-category-suggestions"
-              value={categoryInput}
-              onChange={(e) => setCategoryInput(e.target.value.trim().toLowerCase())}
-              maxLength={32}
-              placeholder="team, investor, treasury, …"
-              spellCheck={false}
-            />
-            <datalist id="neovest-category-suggestions">
-              <option value="team" />
-              <option value="investor" />
-              <option value="treasury" />
-              <option value="public" />
-              <option value="advisor" />
-              <option value="partner" />
-            </datalist>
-            <span className="hint">
-              Free-form. The six built-in categories have themed colors;
-              custom names get a stable color from a hash of the string.
-            </span>
+            <CategoryCombobox value={categoryInput} onChange={setCategoryInput} />
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+              <span className="hint">
+                The category this lock is assigned to. Pick a built-in or type your own.
+              </span>
+              <span className="hint mono">{categoryInput.length} / 32</span>
+            </div>
           </div>
 
           <div className="field">
@@ -982,6 +1000,7 @@ interface RawLockForm {
   startInput: string;
   endInput: string;
   cliffInput: string;
+  stepsInput: string;
   categoryInput: string;
   noteInput: string;
   scheduleType: ScheduleType;
@@ -998,16 +1017,17 @@ type ParsedLockForm =
       startSec: number;
       endSec: number;
       cliffSec: number | undefined;
+      /** Base64-encoded `StdLib.serialize` blob for stepped schedules. */
+      trancheBlobBase64?: string;
     }
   | { ok: false; error: string; tokenHash?: undefined; beneficiaryHash?: undefined };
 
 function parseLockForm(f: RawLockForm): ParsedLockForm {
-  if (f.scheduleType === 'stepped') {
-    return { ok: false, error: 'Stepped vesting is not yet supported in the UI form.' };
-  }
   if (!f.tokenInput.trim()) return { ok: false, error: 'Token contract hash required.' };
   if (!f.beneficiaryInput.trim()) return { ok: false, error: 'Beneficiary required.' };
   if (!f.amountInput.trim()) return { ok: false, error: 'Amount required.' };
+  if (f.categoryInput.length > 32) return { ok: false, error: 'Category must be 32 characters or less.' };
+  if (f.noteInput.length > 256) return { ok: false, error: 'Note must be 256 characters or less.' };
 
   const tokenHash = normalizeHashOrAddress(f.tokenInput);
   if (!tokenHash) return { ok: false, error: 'Token must be a valid 0x… contract hash.' };
@@ -1025,6 +1045,31 @@ function parseLockForm(f: RawLockForm): ParsedLockForm {
   if (f.scheduleType === 'cliff') {
     if (startSec <= nowSec + 30) return { ok: false, error: 'Cliff date must be at least ~30s in the future.' };
     return { ok: true, tokenHash, beneficiaryHash, amountRaw, startSec, endSec: startSec, cliffSec: undefined };
+  }
+
+  if (f.scheduleType === 'stepped') {
+    if (startSec <= nowSec + 30) return { ok: false, error: 'First unlock must be at least ~30s in the future.' };
+    const endSecS = parseLocalDatetime(f.endInput);
+    if (!endSecS) return { ok: false, error: 'Invalid last-unlock date.' };
+    if (endSecS < startSec) return { ok: false, error: 'Last unlock must be ≥ first unlock.' };
+    const steps = parseInt(f.stepsInput, 10);
+    if (!Number.isFinite(steps) || steps < 1) return { ok: false, error: 'Number of tranches must be ≥ 1.' };
+    if (steps > 64) return { ok: false, error: 'Number of tranches must be ≤ 64 (contract limit).' };
+    if (steps > 1 && endSecS === startSec) {
+      return { ok: false, error: 'Last unlock must be after first when there is more than one tranche.' };
+    }
+    const tranches = generateEqualTranches(startSec, endSecS, steps, amountRaw);
+    const trancheBlobBase64 = serializeTranchesToBase64(tranches);
+    return {
+      ok: true,
+      tokenHash,
+      beneficiaryHash,
+      amountRaw,
+      startSec,
+      endSec: endSecS,
+      cliffSec: undefined,
+      trancheBlobBase64,
+    };
   }
 
   // Linear
@@ -1089,6 +1134,110 @@ function shortAddr(s: string): string {
   if (!s) return '';
   if (s.length <= 14) return s;
   return s.slice(0, 6) + '…' + s.slice(-4);
+}
+
+const CATEGORY_SUGGESTIONS = ['team', 'investor', 'treasury', 'public', 'advisor', 'partner'];
+
+/**
+ * Free-form category input with a themed dropdown of built-in suggestions.
+ * Filters as the user types; clicking a suggestion fills the value. Falls
+ * back to whatever the user typed (categories are stored as plain strings
+ * on-chain, no enum constraint).
+ */
+function CategoryCombobox({
+  value, onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [active, setActive] = useState(0);
+  const wrap = useRef<HTMLDivElement>(null);
+
+  // Show all built-ins when the input is empty, an exact match, or a free-
+  // form string with no substring hits. Only narrow the list when the user
+  // is genuinely typing toward one of the built-ins.
+  const suggestions = useMemo(() => {
+    const q = value.trim().toLowerCase();
+    if (!q || CATEGORY_SUGGESTIONS.includes(q)) return CATEGORY_SUGGESTIONS;
+    const filtered = CATEGORY_SUGGESTIONS.filter((s) => s.includes(q));
+    return filtered.length > 0 ? filtered : CATEGORY_SUGGESTIONS;
+  }, [value]);
+
+  // Close when a click lands outside the wrapper.
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  function pick(s: string) {
+    onChange(s);
+    setOpen(false);
+  }
+
+  function onKey(e: React.KeyboardEvent) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setOpen(true);
+      setActive((i) => Math.min(suggestions.length - 1, i + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActive((i) => Math.max(0, i - 1));
+    } else if (e.key === 'Enter' && open && suggestions[active]) {
+      e.preventDefault();
+      pick(suggestions[active]);
+    } else if (e.key === 'Escape') {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <div ref={wrap} className="combobox-wrap">
+      <input
+        className="input"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value.trim().toLowerCase());
+          setOpen(true);
+          setActive(0);
+        }}
+        onFocus={() => setOpen(true)}
+        onKeyDown={onKey}
+        maxLength={32}
+        placeholder="team, investor, treasury, …"
+        spellCheck={false}
+        autoComplete="off"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls="combobox-list"
+      />
+      {open && suggestions.length > 0 && (
+        <ul id="combobox-list" className="combobox-list" role="listbox">
+          {suggestions.map((s, i) => (
+            <li
+              key={s}
+              className={'combobox-item' + (i === active ? ' active' : '')}
+              role="option"
+              aria-selected={i === active}
+              onMouseDown={(e) => {
+                // mousedown fires before blur — pick before the popup closes.
+                e.preventDefault();
+                pick(s);
+              }}
+              onMouseEnter={() => setActive(i)}
+            >
+              <span className="combobox-dot" style={{ background: `var(--cat-${s})` }} />
+              {s}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 /** Pull the lock id from the contract's `LockCreated` event in an applog. */

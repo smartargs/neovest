@@ -74,8 +74,7 @@ and a public dashboard that lets anyone audit it.
 3. **Vest over time** — three schedule types:
    - **Cliff** — all tokens unlock on a single date.
    - **Linear** — continuous vesting between two dates, with optional cliff.
-   - **Stepped** — equal tranches at fixed intervals. *(Contract supported;
-     UI form coming — see [`ROADMAP.md`](ROADMAP.md).)*
+   - **Stepped** — equal tranches at evenly-spaced timestamps (1–64 tranches).
 4. **Claim** — the beneficiary calls `claim(lockId)`. The contract computes
    `vested - alreadyClaimed`, transfers that amount, and updates state.
    Anyone can call `vestedAmount` / `claimableAmount` to read the current

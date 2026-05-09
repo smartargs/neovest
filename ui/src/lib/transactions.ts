@@ -37,7 +37,8 @@ export interface CreateLockArgs {
   startTime: number;     // unix seconds
   endTime: number;
   cliffTime?: number;    // unix seconds; 0 = no cliff
-  trancheBlobHex?: string; // hex-encoded ByteString for stepped, empty for others
+  /** Base64-encoded `StdLib.serialize` blob for stepped; empty/omitted for others. */
+  trancheBlobBase64?: string;
   category: string;
   note: string;
   revocable: boolean;
@@ -50,14 +51,12 @@ const SCHED_CODE: Record<ScheduleType, number> = { cliff: 0, linear: 1, stepped:
  * in the {@code data} payload. Single transaction.
  */
 export async function createLock(provider: UnifiedProvider, a: CreateLockArgs): Promise<string> {
-  // Position 5 is the stepped-schedule tranche blob. For cliff/linear it's
-  // unused; pass an empty ByteArray (the contract ignores it for non-stepped
-  // types). NeoLine doesn't support the `Any` ContractParam type — its dAPI
-  // accepts only ByteArray/Hash160/Hash256/Integer/String/Boolean/Array, so
-  // any of those work here.
+  // Position 5 is the stepped-schedule tranche blob (base64-encoded
+  // StdLib.serialize output). For cliff/linear it's unused — pass an empty
+  // ByteArray. NeoLine doesn't support the `Any` ContractParam type.
   const trancheArg: Arg =
-    a.scheduleType === 'stepped' && a.trancheBlobHex
-      ? { type: 'ByteArray', value: a.trancheBlobHex }
+    a.scheduleType === 'stepped' && a.trancheBlobBase64
+      ? { type: 'ByteArray', value: a.trancheBlobBase64 }
       : { type: 'ByteArray', value: '' };
 
   const dataArr: Arg[] = [

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { KNOWN_DEPLOYMENTS } from '@/lib/known-deployments';
-import { CONTRACT } from '@/lib/data';
 import { IconChevronRight } from '@/components/icons';
 
 export function Landing() {
@@ -10,7 +9,8 @@ export function Landing() {
 
   function open(e: React.FormEvent) {
     e.preventDefault();
-    const v = hash.trim() || CONTRACT;
+    const v = hash.trim();
+    if (!v) return;
     navigate(`/v/${v}`);
   }
 
@@ -61,6 +61,7 @@ export function Landing() {
           </Link>
         </div>
 
+        {KNOWN_DEPLOYMENTS.length > 0 && (
         <div style={{ marginTop: 40 }}>
           <div
             style={{
@@ -93,6 +94,7 @@ export function Landing() {
             ))}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

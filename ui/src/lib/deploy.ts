@@ -12,7 +12,6 @@
  */
 
 import { sc, u, wallet } from '@cityofzion/neon-js';
-import { NeonInvoker } from '@cityofzion/neon-dappkit';
 import type { ContractInvocationMulti } from '@cityofzion/neon-dappkit-types';
 import type { UnifiedProvider } from './connection';
 import { NEF_BASE64, MANIFEST_JSON, ARTIFACTS_AVAILABLE } from './nef-artifacts';
@@ -47,8 +46,9 @@ export function isArtifactsAvailable(): boolean {
 export function buildDeployPayload(args: DeployArgs): ContractInvocationMulti {
   const ownerScriptHash = toScriptHash(args.ownerAddress);
   const deployerScriptHash = toScriptHash(args.deployerAddress);
-  const nefHex = base64ToHex(NEF_BASE64);
-  const manifestHex = u.str2hexstring(MANIFEST_JSON);
+  // Per the Neo dapi spec, ByteArray ContractParam values are BASE64,
+  // not hex. NEF is already base64; manifest gets utf8 → base64.
+  const manifestB64 = u.HexString.fromHex(u.str2hexstring(MANIFEST_JSON)).toBase64();
 
   // ContractManagement.deploy(nef, manifest, [optional data])
   // The third arg is forwarded as `data` to the new contract's _deploy callback.
@@ -61,8 +61,8 @@ export function buildDeployPayload(args: DeployArgs): ContractInvocationMulti {
         scriptHash: CONTRACT_MANAGEMENT,
         operation: 'deploy',
         args: [
-          { type: 'ByteArray', value: nefHex },
-          { type: 'ByteArray', value: manifestHex },
+          { type: 'ByteArray', value: NEF_BASE64 },
+          { type: 'ByteArray', value: manifestB64 },
           { type: 'Hash160', value: ownerScriptHash },
         ],
       },
@@ -109,21 +109,26 @@ export async function predictDeployFee(args: DeployArgs): Promise<DeployFee> {
   if (!ARTIFACTS_AVAILABLE) {
     throw new Error('No NEF/manifest bundled — recompile the contract and rebuild the UI.');
   }
-  const invoker = await NeonInvoker.init({ rpcAddress: resolveRpcUrl() });
+  // Use a raw `invokefunction` test-invoke for the system fee, then compute
+  // the network fee from the tx size. We avoid NeonInvoker's `calculateFee`
+  // because its witness-simulation path faults on some neo-cli versions
+  // (notably the AxLabs localnet RpcServer) for native ContractManagement
+  // calls. The raw test-invoke gives us the same `gasconsumed` value.
+  const rpcUrl = resolveRpcUrl();
   const payload = buildDeployPayload(args);
-  const fee = await invoker.calculateFee(payload);
-  // neon-dappkit returns fees as decimal-GAS strings (e.g. "10.00157522"),
-  // not raw integer units. Convert by shifting 8 decimal places.
-  const sys = gasStringToRaw(fee.systemFee);
-  const net = gasStringToRaw(fee.networkFee);
+  const rawResp = await rawTestInvokeDeploy(rpcUrl, args, payload);
+  if (rawResp.state === 'FAULT') {
+    throw new Error(
+      `Test-invoke FAULT: ${rawResp.exception ?? '(no message)'}`,
+    );
+  }
+  const sys = BigInt(rawResp.gasconsumed ?? '0');
+  // Network fee for a single-sig CalledByEntry deploy tx. The dominant cost
+  // is system fee (~10 GAS); network fee for a ~3KB tx is ~0.001-0.002 GAS,
+  // a constant rounded conservatively here. The wallet shows the precise
+  // value at signing time.
+  const net = 200_000n;
   return { systemFee: sys, networkFee: net, total: sys + net };
-}
-
-/** Convert a decimal-GAS string ("10.00157522") to raw units (1000157522n). */
-function gasStringToRaw(s: string): bigint {
-  const [whole, frac = ''] = String(s).split('.');
-  const fracPadded = (frac + '00000000').slice(0, 8);
-  return BigInt(whole) * 100_000_000n + BigInt(fracPadded);
 }
 
 export interface DeployFee {
@@ -145,6 +150,34 @@ export function fmtGas(rawAmount: bigint): string {
   // Trim trailing zeros from the fractional part for compact display.
   const fracStr = frac.toString().padStart(Number(decimals), '0').replace(/0+$/, '');
   return `${whole}.${fracStr} GAS`;
+}
+
+/**
+ * Extract the deployed contract hash from a `getapplicationlog` response.
+ * ContractManagement emits a `Deploy` notification on first deploy with the
+ * new contract's Hash160 (base64 little-endian) as the first state item.
+ *
+ * Returns `null` if the log is malformed or doesn't contain the event —
+ * callers should fall back to {@link predictContractHash} in that case.
+ */
+export function extractDeployedContractHash(log: unknown): string | null {
+  type Execution = { notifications?: Notif[] };
+  type Notif = { eventname?: string; state?: { value?: { type?: string; value?: string }[] } };
+  type Log = { executions?: Execution[] };
+  const execs = (log as Log)?.executions ?? [];
+  for (const e of execs) {
+    for (const n of e.notifications ?? []) {
+      if (n.eventname !== 'Deploy') continue;
+      const items = n.state?.value;
+      if (!items || items.length === 0) continue;
+      const first = items[0];
+      if (typeof first.value !== 'string') continue;
+      // Hash160 ByteString comes back base64-encoded, little-endian.
+      const hexLE = u.base642hex(first.value);
+      return '0x' + u.reverseHex(hexLE);
+    }
+  }
+  return null;
 }
 
 /**
@@ -201,6 +234,55 @@ function stripHex(s: string): string {
   return s.startsWith('0x') ? s.slice(2) : s;
 }
 
+/**
+ * Call the RPC node's `invokefunction` directly for the deploy. Bypasses
+ * NeonInvoker so we can see the raw FAULT response (state, exception,
+ * script, notifications) — NeonInvoker throws on FAULT and discards them.
+ */
+async function rawTestInvokeDeploy(
+  rpcUrl: string,
+  args: DeployArgs,
+  payload: ContractInvocationMulti,
+): Promise<{
+  state: 'HALT' | 'FAULT';
+  exception?: string;
+  script?: string;
+  gasconsumed?: string;
+  stack?: unknown[];
+  notifications?: unknown[];
+}> {
+  const ownerScriptHash = toScriptHash(args.ownerAddress);
+  const deployerScriptHash = toScriptHash(args.deployerAddress).replace(/^0x/, '');
+  const invocation = payload.invocations[0];
+  const body = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'invokefunction',
+    params: [
+      invocation.scriptHash,
+      invocation.operation,
+      [
+        // RPC's `invokefunction` parses ByteArray values as base64 — same
+        // format as buildDeployPayload now uses, so values pass through.
+        invocation.args![0] as { type: string; value: string },
+        invocation.args![1] as { type: string; value: string },
+        { type: 'Hash160', value: ownerScriptHash.replace(/^0x/, '') },
+      ],
+      [{ account: deployerScriptHash, scopes: 'CalledByEntry' }],
+    ],
+  };
+  const resp = await fetch(rpcUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await resp.json();
+  if (json.error) {
+    throw new Error(`RPC error: ${JSON.stringify(json.error)}`);
+  }
+  return json.result;
+}
+
 function toScriptHash(addrOrHash: string): string {
   const s = addrOrHash.trim();
   if (s.startsWith('0x') && s.length === 42) return s.toLowerCase();
@@ -208,12 +290,3 @@ function toScriptHash(addrOrHash: string): string {
   return '0x' + wallet.getScriptHashFromAddress(s);
 }
 
-function base64ToHex(b64: string): string {
-  // Browser path: atob → string of latin-1 bytes → hex
-  const bin = atob(b64);
-  let out = '';
-  for (let i = 0; i < bin.length; i++) {
-    out += bin.charCodeAt(i).toString(16).padStart(2, '0');
-  }
-  return out;
-}

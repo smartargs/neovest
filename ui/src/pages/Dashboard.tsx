@@ -1,35 +1,33 @@
 import { useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   CATEGORIES,
-  CONTRACT,
-  TODAY,
-  TOKEN,
   categoryColor,
   scheduleSummary,
   vestedAt,
   type Lock,
 } from '@/lib/data';
-import { useAllLocks } from '@/lib/hooks';
+import { useAllLocks, useTokenInfo } from '@/lib/hooks';
 import { useVerification } from '@/lib/verification';
-import { fmtDate, fmtNum, fmtRelative } from '@/lib/format';
+import { fmtDate, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { nextUnlockDate } from '@/lib/vesting-math';
 import { StatCard } from '@/components/StatCard';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
-import { IconCheck, IconChevronDown, IconChevronRight, IconCopy, IconSearch } from '@/components/icons';
+import { IconCheck, IconChevronRight, IconCopy, IconSearch } from '@/components/icons';
 import { VestingTimelineChart, type TimelineRange } from '@/components/charts/VestingTimelineChart';
 import { DonutChart } from '@/components/charts/DonutChart';
 import { UpcomingBar, type UpcomingBucket } from '@/components/charts/UpcomingBar';
 
 export function Dashboard() {
-  const today = TODAY;
+  const today = useMemo(() => new Date(), []);
   const { contractHash } = useParams<{ contractHash: string }>();
+  const navigate = useNavigate();
   const { data: locks, isLoading, error, refetch } = useAllLocks(contractHash ?? '');
   const { data: verification = 'loading' } = useVerification(contractHash ?? '');
   // The hook returns the unified `lib/types.Lock`; structurally identical to
-  // the mock `lib/data.Lock` so we cast at the boundary instead of refactoring
-  // every chart/helper signature.
+  // the display `lib/data.Lock` so we cast at the boundary instead of
+  // refactoring every chart/helper signature.
   const items: Lock[] = (locks ?? []) as unknown as Lock[];
 
   const [range, setRange] = useState<TimelineRange>('all');
@@ -39,23 +37,38 @@ export function Dashboard() {
     return o;
   });
 
-  // Build a lazy timeline mirroring lib/data.ts's buildTimeline but against
-  // whatever locks the hook returned (mock or real).
+  // Build a timeline of cumulative-vested-by-category over the lock range.
   const timeline = useMemo(() => {
     if (items.length === 0) {
       return { data: emptyTimeline(), minStart: today, maxEnd: today };
     }
-    const minStart = new Date(Math.min(...items.map((l) => l.start.getTime())));
-    const maxEnd = new Date(Math.max(...items.map((l) => l.end.getTime())));
+    let minStart = new Date(Math.min(...items.map((l) => l.start.getTime())));
+    let maxEnd = new Date(Math.max(...items.map((l) => l.end.getTime())));
+    // Guard zero-width ranges (a single cliff-style lock with start === end
+    // collapses the chart x-axis to a point and produces NaN coordinates).
+    // Expand to ±15 days around the point so the step renders meaningfully.
+    if (maxEnd.getTime() - minStart.getTime() < 24 * 3600 * 1000) {
+      const center = (minStart.getTime() + maxEnd.getTime()) / 2;
+      minStart = new Date(center - 15 * 24 * 3600 * 1000);
+      maxEnd = new Date(center + 15 * 24 * 3600 * 1000);
+    }
     return { data: buildTimelineLocal(items, minStart, maxEnd, 130), minStart, maxEnd };
   }, [items, today]);
 
   const totalLocked = items.reduce((s, l) => s + l.amount, 0);
   const totalClaimed = items.reduce((s, l) => s + (l.claimed ?? 0), 0);
   const remaining = totalLocked - totalClaimed;
-  const pctOfSupply = ((totalLocked / TOKEN.totalSupply) * 100).toFixed(1);
   const uniqueBens = new Set(items.map((l) => l.ben)).size;
   const largest = items.length === 0 ? null : items.reduce<Lock>((a, b) => (a.amount > b.amount ? a : b), items[0]);
+  const tokenSet = new Set(items.map((l) => l.token).filter(Boolean));
+  const uniqueTokens = tokenSet.size;
+  // Single-token vault → show symbol + % of supply. Multi-token → skip.
+  const singleToken = uniqueTokens === 1 ? Array.from(tokenSet)[0] : undefined;
+  const { data: tokenInfo } = useTokenInfo(singleToken);
+  const pctOfSupply =
+    tokenInfo && tokenInfo.totalSupply > 0
+      ? ((totalLocked / tokenInfo.totalSupply) * 100).toFixed(2)
+      : null;
 
   const byCat = CATEGORIES.map((c) => {
     const total = items.filter((l) => l.cat === c.id).reduce((s, l) => s + l.amount, 0);
@@ -64,11 +77,14 @@ export function Dashboard() {
   const totalForCats = byCat.reduce((s, c) => s + c.value, 0);
 
   const upcoming = useMemo<UpcomingBucket[]>(() => {
+    // Show last 1 week + next 12 weeks so a cliff vested today/recently
+    // appears in bucket 0 instead of vanishing.
     const buckets: UpcomingBucket[] = [];
     const weeks = 13;
+    const offsetWeeks = -1;
     for (let i = 0; i < weeks; i++) {
-      const start = new Date(today.getTime() + i * 7 * 24 * 3600 * 1000);
-      const end = new Date(today.getTime() + (i + 1) * 7 * 24 * 3600 * 1000);
+      const start = new Date(today.getTime() + (i + offsetWeeks) * 7 * 24 * 3600 * 1000);
+      const end = new Date(today.getTime() + (i + offsetWeeks + 1) * 7 * 24 * 3600 * 1000);
       let amt = 0;
       let dom: string | null = null;
       const catTot: Record<string, number> = {};
@@ -91,15 +107,17 @@ export function Dashboard() {
       buckets.push({ start, end, amount: amt, color: dom ? categoryColor(dom) : 'var(--text-quaternary)' });
     }
     return buckets;
-  }, [today]);
+  }, [today, items]);
 
   const nextEvents = useMemo(() => {
     const events: { date: Date; amount: number; lock: Lock }[] = [];
+    // Include events from the last 24h so a same-day cliff doesn't disappear.
+    const cutoff = new Date(today.getTime() - 24 * 3600 * 1000);
     items.forEach((l) => {
       if (l.type === 'cliff') {
-        if (l.end > today) events.push({ date: l.end, amount: l.amount, lock: l });
+        if (l.end > cutoff) events.push({ date: l.end, amount: l.amount, lock: l });
       } else if (l.type === 'linear') {
-        if (l.cliff && l.cliff > today) {
+        if (l.cliff && l.cliff > cutoff) {
           const v = vestedAt(l, l.cliff);
           if (v > 0) events.push({ date: l.cliff, amount: v, lock: l });
         }
@@ -125,7 +143,7 @@ export function Dashboard() {
     });
     events.sort((a, b) => a.date.getTime() - b.date.getTime());
     return events.slice(0, 5);
-  }, [today]);
+  }, [today, items]);
 
   // ---- Table search + filter ----
   const [search, setSearch] = useState('');
@@ -192,7 +210,17 @@ export function Dashboard() {
           <div>
             <h1 className="page-title">Vesting Dashboard</h1>
             <div className="page-subtitle">
-              <span className="mono">{contractHash?.slice(0, 6)}…{contractHash?.slice(-4)}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span className="mono">{shortHash(contractHash ?? '')}</span>
+                <button
+                  className="icon-btn"
+                  style={{ width: 22, height: 22 }}
+                  aria-label="Copy contract"
+                  onClick={() => contractHash && navigator.clipboard?.writeText(contractHash)}
+                >
+                  <IconCopy size={12} />
+                </button>
+              </span>
               <span className="sep">·</span>
               <VerificationBadge status={verification} />
             </div>
@@ -220,33 +248,18 @@ export function Dashboard() {
           <h1 className="page-title">Vesting Dashboard</h1>
           <div className="page-subtitle">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <span className="mono">0x7f3a...e2c1</span>
+              <span className="mono">{shortHash(contractHash ?? '')}</span>
               <button
                 className="icon-btn"
                 style={{ width: 22, height: 22 }}
                 aria-label="Copy contract"
-                onClick={() => navigator.clipboard?.writeText(CONTRACT)}
+                onClick={() => contractHash && navigator.clipboard?.writeText(contractHash)}
               >
                 <IconCopy size={12} />
               </button>
             </span>
             <span className="sep">·</span>
-            <span>Mainnet</span>
-            <span className="sep">·</span>
             <VerificationBadge status={verification} />
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <div className="token-selector">
-            <span className="token-logo">L</span>
-            <div>
-              <div className="name">
-                Lattice <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}>(LTC)</span>
-              </div>
-              <div className="total mono">{fmtNum(TOKEN.totalSupply, { compact: true })} supply</div>
-            </div>
-            <IconChevronDown />
           </div>
         </div>
       </div>
@@ -254,12 +267,17 @@ export function Dashboard() {
       <div className="stat-grid">
         <StatCard
           eyebrow="Total locked"
-          value={fmtNum(totalLocked)}
-          unit="LTC"
+          value={fmtTokenAmount(totalLocked, tokenInfo?.decimals ?? 8)}
+          unit={tokenInfo?.symbol}
           sub={
             <span>
-              <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{pctOfSupply}%</span> of supply ·{' '}
-              {fmtNum(remaining, { compact: true })} unclaimed
+              {pctOfSupply && (
+                <>
+                  <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{pctOfSupply}%</span>{' '}
+                  of supply ·{' '}
+                </>
+              )}
+              {fmtTokenAmount(remaining, tokenInfo?.decimals ?? 8, { compact: true })} unclaimed
             </span>
           }
         />
@@ -269,7 +287,7 @@ export function Dashboard() {
           sub={
             <span>
               across <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{CATEGORIES.length}</span>{' '}
-              categories · 1 token
+              categories · {uniqueTokens || 1} token{uniqueTokens === 1 ? '' : 's'}
             </span>
           }
         />
@@ -280,7 +298,7 @@ export function Dashboard() {
             <span>
               unique addresses{largest && ' · largest: '}
               <span className="mono" style={{ color: 'var(--text-primary)' }}>
-                {largest && fmtNum(largest.amount, { compact: true })}{largest && ' LTC'}
+                {largest && fmtTokenAmount(largest.amount, 8, { compact: true })}
               </span>
             </span>
           }
@@ -309,22 +327,6 @@ export function Dashboard() {
             range={range}
             activeCats={activeCats}
           />
-          <div className="chart-tip" style={{ left: '54%', top: 36 }}>
-            <div className="dt">Mar 15, 2027</div>
-            {CATEGORIES.filter((c) => activeCats[c.id])
-              .slice(0, 5)
-              .map((c) => {
-                const series = timeline.data[c.id];
-                const idx = Math.floor(series.length * 0.42);
-                return (
-                  <div key={c.id} className="row">
-                    <span className="sw" style={{ background: categoryColor(c.id) }} />
-                    <span className="nm">{c.name}</span>
-                    <span className="am">{fmtNum(series[idx].v, { compact: true })}</span>
-                  </div>
-                );
-              })}
-          </div>
         </div>
 
         <div className="chart-legend">
@@ -339,7 +341,7 @@ export function Dashboard() {
               >
                 <span className="swatch" style={{ background: categoryColor(c.id) }} />
                 <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{c.name}</span>
-                <span className="amt">{fmtNum(total, { compact: true })}</span>
+                <span className="amt">{fmtTokenAmount(total, 8, { compact: true })}</span>
               </div>
             );
           })}
@@ -370,9 +372,8 @@ export function Dashboard() {
                   Total locked
                 </div>
                 <div className="mono" style={{ fontSize: 18, fontWeight: 500, color: 'var(--text-primary)' }}>
-                  {fmtNum(totalForCats, { compact: true })}
+                  {fmtTokenAmount(totalForCats, 8, { compact: true })}
                 </div>
-                <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginTop: 1 }}>LTC</div>
               </div>
             </div>
             <div className="donut-legend">
@@ -380,7 +381,7 @@ export function Dashboard() {
                 <div key={c.id} className="row">
                   <span className="sw" style={{ background: c.color }} />
                   <span className="nm">{c.name}</span>
-                  <span className="am">{fmtNum(c.value, { compact: true })}</span>
+                  <span className="am">{fmtTokenAmount(c.value, 8, { compact: true })}</span>
                   <span className="pc">{((c.value / totalForCats) * 100).toFixed(1)}%</span>
                 </div>
               ))}
@@ -418,7 +419,7 @@ export function Dashboard() {
                     {fmtDate(e.date, { short: true })}, {e.date.getUTCFullYear()}
                   </span>
                   <span className="am">
-                    {fmtNum(e.amount, { compact: true })} <span style={{ color: 'var(--text-secondary)' }}>LTC</span>
+                    {fmtTokenAmount(e.amount, 8, { compact: true })}
                   </span>
                   <CategoryPill catId={e.lock.cat} />
                 </div>
@@ -475,7 +476,11 @@ export function Dashboard() {
                 const pct = (vested / l.amount) * 100;
                 const next = nextUnlockDate(l, today);
                 return (
-                  <tr key={l.id}>
+                  <tr
+                    key={l.id}
+                    onClick={() => navigate(`/v/${contractHash}/lock/${l.id}`)}
+                    style={{ cursor: 'pointer' }}
+                  >
                     <td><CategoryPill catId={l.cat} /></td>
                     <td>
                       <div className="beneficiary-cell">
@@ -485,8 +490,7 @@ export function Dashboard() {
                     </td>
                     <td className="num">
                       <div className="amount-cell" style={{ textAlign: 'right' }}>
-                        <span className="v">{fmtNum(l.amount)}</span>
-                        <span className="sym">LTC</span>
+                        <span className="v">{fmtTokenAmount(l.amount)}</span>
                       </div>
                     </td>
                     <td>
@@ -560,7 +564,7 @@ function DashboardSkeleton() {
 
 // ---------- Verification badge ----------
 
-function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unverified' | 'demo' | 'unknown' }) {
+function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unverified' | 'unknown' }) {
   if (status === 'verified') {
     return (
       <span
@@ -581,13 +585,6 @@ function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unver
       </span>
     );
   }
-  if (status === 'demo') {
-    return (
-      <span style={{ color: 'var(--text-tertiary)' }} title="Demo data — no contract is deployed at this hash.">
-        Demo
-      </span>
-    );
-  }
   if (status === 'unknown') {
     return (
       <span
@@ -604,6 +601,12 @@ function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unver
 
 // ---------- Local helpers ----------
 
+function shortHash(s: string): string {
+  if (!s) return '';
+  if (s.length <= 14) return s;
+  return s.slice(0, 6) + '…' + s.slice(-4);
+}
+
 type TimelineSeries = Record<string, { t: Date; v: number }[]>;
 
 function emptyTimeline(): TimelineSeries {
@@ -612,7 +615,6 @@ function emptyTimeline(): TimelineSeries {
   return out;
 }
 
-/** Mirrors lib/data.ts buildTimeline but operates on a passed-in lock array. */
 function buildTimelineLocal(locks: Lock[], start: Date, end: Date, points: number): TimelineSeries {
   const series: TimelineSeries = {};
   CATEGORIES.forEach((c) => (series[c.id] = []));

@@ -1,7 +1,8 @@
+import { useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { TODAY, categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
+import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
 import { useLock } from '@/lib/hooks';
-import { fmtDate, fmtNum } from '@/lib/format';
+import { fmtDate, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
 import { MiniCurve } from '@/components/charts/MiniCurve';
@@ -11,9 +12,10 @@ export function LockDetail() {
   const { lockId, contractHash } = useParams<{ lockId: string; contractHash: string }>();
   const lockIdNum = lockId ? parseInt(lockId, 10) : undefined;
   const { data: rawLock, isLoading } = useLock(contractHash ?? '', lockIdNum);
-  // Cast at the boundary — unified Lock from hooks is structurally identical
-  // to the mock Lock the components were written against.
+  // Cast at the boundary — types.Lock from the hook is structurally
+  // identical to the display Lock the components were written against.
   const lock = (rawLock ?? null) as unknown as Lock | null;
+  const today = useMemo(() => new Date(), []);
 
   if (isLoading && !lock) {
     return (
@@ -34,7 +36,7 @@ export function LockDetail() {
     );
   }
 
-  const vested = vestedAt(lock, TODAY);
+  const vested = vestedAt(lock, today);
   const claimable = Math.max(0, vested - (lock.claimed ?? 0));
   const pct = (vested / lock.amount) * 100;
 
@@ -67,15 +69,16 @@ export function LockDetail() {
             </div>
           </div>
           <div className="chart-wrap" style={{ height: 200, background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: 6 }}>
-            <MiniCurve width={520} height={200} lock={lock} today={TODAY} />
+            <MiniCurve width={520} height={200} lock={lock} today={today} />
           </div>
           <dl className="dl" style={{ marginTop: 16 }}>
-            <dt>Total amount</dt><dd>{fmtNum(lock.amount)} LTC</dd>
-            <dt>Vested today</dt><dd>{fmtNum(vested)} LTC ({pct.toFixed(1)}%)</dd>
-            <dt>Claimed</dt><dd>{fmtNum(lock.claimed ?? 0)} LTC</dd>
+            <dt>Token</dt><dd className="mono">{lock.token ? shortHash(lock.token) : '—'}</dd>
+            <dt>Total amount</dt><dd>{fmtTokenAmount(lock.amount)}</dd>
+            <dt>Vested today</dt><dd>{fmtTokenAmount(vested)} ({pct.toFixed(1)}%)</dd>
+            <dt>Claimed</dt><dd>{fmtTokenAmount(lock.claimed ?? 0)}</dd>
             <dt>Claimable</dt>
             <dd style={{ color: claimable > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
-              {fmtNum(claimable)} LTC
+              {fmtTokenAmount(claimable)}
             </dd>
             <dt>Starts</dt><dd>{fmtDate(lock.start)}</dd>
             {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDate(lock.cliff)}</dd></>)}
@@ -103,4 +106,10 @@ export function LockDetail() {
       </div>
     </div>
   );
+}
+
+function shortHash(s: string): string {
+  if (!s) return '';
+  if (s.length <= 14) return s;
+  return s.slice(0, 6) + '…' + s.slice(-4);
 }

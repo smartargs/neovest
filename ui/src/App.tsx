@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Route, Routes, useParams } from 'react-router-dom';
 import { Header } from './components/Header';
 import { Footer } from './components/Footer';
+import { NetworkBanner } from './components/NetworkBanner';
 import { Landing } from './pages/Landing';
 import { Dashboard } from './pages/Dashboard';
 import { Manage } from './pages/Manage';
@@ -27,6 +28,7 @@ function App() {
 
   return (
     <div className="app">
+      <NetworkBanner />
       <Routes>
         <Route path="/" element={<Shell theme={theme} toggleTheme={toggleTheme}><Landing /></Shell>} />
         <Route path="/deploy" element={<Shell theme={theme} toggleTheme={toggleTheme}><Deploy /></Shell>} />

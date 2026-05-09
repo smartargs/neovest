@@ -27,3 +27,6 @@ deploy.json
 CLAUDE.md
 CLAUDE.local.md
 VESTING_PROJECT_PLAN.md
+
+# Local-net chain (cloned by `localnet/start.sh`)
+localnet/.chain/

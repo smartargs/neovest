@@ -55,6 +55,9 @@ export function VestingTimelineChart({
   }
   rangeStart = Math.max(rangeStart, t0);
   rangeEnd = Math.min(rangeEnd, tN);
+  // Guard zero-width ranges so xScale doesn't divide by zero. Caller usually
+  // pads the range upstream; this is belt-and-suspenders.
+  if (rangeEnd <= rangeStart) rangeEnd = rangeStart + 1;
 
   const stacked = series0.map((_, i) => {
     let acc = 0;

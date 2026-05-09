@@ -15,7 +15,6 @@ export function DonutChart({ size = 200, segments }: DonutChartProps) {
   const r = size / 2;
   const innerR = r * 0.62;
   const total = segments.reduce((s, x) => s + x.value, 0);
-  let acc = 0;
 
   function arc(cx: number, cy: number, R: number, a0: number, a1: number) {
     const x0 = cx + R * Math.cos(a0);
@@ -26,6 +25,30 @@ export function DonutChart({ size = 200, segments }: DonutChartProps) {
     return { x0, y0, x1, y1, large };
   }
 
+  // A single non-zero segment renders as a complete ring — SVG arcs can't
+  // close a 360° sweep with a single A command (start === end), so split
+  // into two semicircles via a dedicated helper.
+  if (segments.length === 1 && total > 0) {
+    const s = segments[0];
+    const Rout = r - 2;
+    const Rin = innerR;
+    const d =
+      `M ${r - Rout} ${r} ` +
+      `A ${Rout} ${Rout} 0 1 1 ${r + Rout} ${r} ` +
+      `A ${Rout} ${Rout} 0 1 1 ${r - Rout} ${r} ` +
+      `Z ` +
+      `M ${r - Rin} ${r} ` +
+      `A ${Rin} ${Rin} 0 1 0 ${r + Rin} ${r} ` +
+      `A ${Rin} ${Rin} 0 1 0 ${r - Rin} ${r} ` +
+      `Z`;
+    return (
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <path d={d} fill={s.color} opacity={s.dim ? 0.25 : 1} fillRule="evenodd" />
+      </svg>
+    );
+  }
+
+  let acc = 0;
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
       {segments.map((s, i) => {

@@ -20,7 +20,9 @@ public final class DeployLocal {
     public static void main(String[] args) throws Throwable {
         String rpcUrl = System.getenv().getOrDefault("NEO_RPC", DEFAULT_RPC);
         String wif    = System.getenv().getOrDefault("DEPLOYER_WIF", DEFAULT_LOCAL_WIF);
-        Deploy.run(rpcUrl, wif);
+        // VAULT_OWNER is optional locally — defaults to the local deployer.
+        String owner  = System.getenv("VAULT_OWNER");
+        Deploy.run(rpcUrl, wif, owner);
     }
 
     private DeployLocal() {}

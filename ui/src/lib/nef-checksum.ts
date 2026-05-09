@@ -6,4 +6,4 @@
  * this against the deployed contract's NEF checksum (fetched via RPC) to
  * decide the "Verified" badge — see lib/verification.ts.
  */
-export const EXPECTED_NEF_CHECKSUM = 1244771526;
+export const EXPECTED_NEF_CHECKSUM = 3551126892;

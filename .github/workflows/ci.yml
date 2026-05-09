@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Allow only one CI run per ref at a time.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Contract — Gradle test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Run contract tests
+        run: ./gradlew :contract:test
+      - name: Compile NEF
+        run: ./gradlew :contract:neow3jCompile
+
+  ui:
+    name: UI — typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Install
+        working-directory: ui
+        run: npm ci
+      # The UI's `prebuild` script bundles the compiled NEF + checksum.
+      # Compile the contract first so those scripts have something to copy.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile contract for UI bundling
+        run: ./gradlew :contract:neow3jCompile
+      - name: Type-check
+        working-directory: ui
+        run: npx tsc -b
+      - name: Build
+        working-directory: ui
+        run: npm run build
+      - name: Bundle-size budget
+        working-directory: ui
+        run: |
+          set -euo pipefail
+          # Fail the build if any individual JS chunk exceeds the budget.
+          # Tune as needed; the budget is intentionally loose pre-1.0.
+          MAX_BYTES=$((1500 * 1024))   # 1.5 MB uncompressed per chunk
+          oversized=0
+          for f in dist/assets/*.js; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -gt "$MAX_BYTES" ]; then
+              echo "::error file=$f::Chunk exceeds budget: $size bytes (max $MAX_BYTES)"
+              oversized=1
+            fi
+          done
+          exit "$oversized"

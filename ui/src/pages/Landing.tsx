@@ -1,30 +1,157 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { wallet as neonWallet } from '@cityofzion/neon-js';
 import { KNOWN_DEPLOYMENTS } from '@/lib/known-deployments';
 import { useConnection } from '@/lib/connection';
 import { useVaultRoles } from '@/lib/hooks';
 import { getHistory, removeFromHistory, type VaultHistoryEntry } from '@/lib/vault-history';
-import { fmtRelative } from '@/lib/format';
-import { IconChevronRight, IconCheck, IconLock, IconClaim, IconStairs } from '@/components/icons';
+
+// ────────────────────────────────────────────────────────────────────
+// Helpers
+// ────────────────────────────────────────────────────────────────────
+
+function shortHash(h: string): string {
+  if (!h || h.length < 14) return h;
+  return `${h.slice(0, 10)}…${h.slice(-8)}`;
+}
+
+function timeAgo(ts: number): string {
+  const s = Math.max(1, Math.floor((Date.now() - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d === 1) return 'yesterday';
+  if (d < 7) return `${d}d ago`;
+  const w = Math.floor(d / 7);
+  if (w < 5) return `${w}w ago`;
+  const mo = Math.floor(d / 30);
+  return `${mo}mo ago`;
+}
+
+const HOW_IT_WORKS: { t: string; d: string }[] = [
+  {
+    t: 'Owner-only deposits.',
+    d: 'The address set at deploy time is the only one that can move tokens into the vault — no admin override, no upgrade path.',
+  },
+  {
+    t: 'Schedule types.',
+    d: 'Cliff or linear schedules with optional cliff, configurable per beneficiary. Stepped schedules are supported on-chain; UI form is on the roadmap.',
+  },
+  {
+    t: 'Beneficiary-controlled claims.',
+    d: 'The contract holds tokens and beneficiaries claim directly. No hot wallet, no operator on the path.',
+  },
+  {
+    t: 'Verifiable bytecode.',
+    d: 'The dashboard cross-checks the deployed contract’s NEF checksum against the audited source bundled with this build.',
+  },
+];
+
+// ────────────────────────────────────────────────────────────────────
+// Sub-components
+// ────────────────────────────────────────────────────────────────────
+
+function RoleBadge({ role }: { role: 'Owner' | 'Depositor' | 'Beneficiary' }) {
+  const cls =
+    role === 'Owner' ? 'owner' :
+    role === 'Depositor' ? 'depositor' :
+    'beneficiary';
+  return <span className={`badge nv-role ${cls}`}>{role}</span>;
+}
+
+function VaultRow({
+  entry,
+  meHash,
+  isConnected,
+  onForget,
+}: {
+  entry: VaultHistoryEntry;
+  meHash: string | undefined;
+  isConnected: boolean;
+  onForget: (hash: string) => void;
+}) {
+  const navigate = useNavigate();
+  const { data: roles } = useVaultRoles(entry.hash, meHash);
+
+  const isDemo = entry.hash.toLowerCase() === 'demo';
+  const target = isDemo ? '/v/demo' : `/v/${entry.hash}`;
+
+  const visibleRoles = isConnected && roles
+    ? (['Owner', 'Depositor', 'Beneficiary'] as const).filter((r) => {
+        if (r === 'Owner') return roles.isOwner;
+        if (r === 'Depositor') return roles.isDepositor;
+        return roles.isBeneficiary;
+      })
+    : [];
+
+  function onForgetClick(e: MouseEvent) {
+    e.stopPropagation();
+    e.preventDefault();
+    onForget(entry.hash);
+  }
+
+  return (
+    <li
+      className="nv-vault"
+      role="link"
+      tabIndex={0}
+      onClick={() => navigate(target)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') navigate(target);
+      }}
+    >
+      <div className="nv-vault-main">
+        <div className="nv-vault-row1">
+          {isDemo ? (
+            <span className="nv-vault-name">
+              Demo vault
+              <span className="nv-vault-tag">read-only</span>
+            </span>
+          ) : (
+            <span className="nv-vault-hash">{shortHash(entry.hash)}</span>
+          )}
+          {visibleRoles.length > 0 && (
+            <span className="nv-roles">
+              {visibleRoles.map((r) => (
+                <RoleBadge key={r} role={r} />
+              ))}
+            </span>
+          )}
+        </div>
+        <div className="nv-vault-meta">last visited {timeAgo(entry.visitedAt)}</div>
+      </div>
+      <div className="nv-vault-actions">
+        <button
+          className="nv-iconbtn nv-forget"
+          aria-label="Forget vault"
+          title="Forget"
+          onClick={onForgetClick}
+        >
+          ×
+        </button>
+      </div>
+      <div className="nv-chev" aria-hidden>›</div>
+    </li>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Page
+// ────────────────────────────────────────────────────────────────────
 
 export function Landing() {
-  const [hash, setHash] = useState('');
   const navigate = useNavigate();
   const conn = useConnection();
+  const [hash, setHash] = useState('');
   const [history, setHistory] = useState<VaultHistoryEntry[]>(() => getHistory());
 
   // localStorage doesn't fire "storage" for same-tab updates; refresh on mount.
   useEffect(() => {
     setHistory(getHistory());
   }, []);
-
-  function open(e: React.FormEvent) {
-    e.preventDefault();
-    const v = hash.trim();
-    if (!v) return;
-    navigate(`/v/${v}`);
-  }
 
   const meHash = useMemo(() => {
     if (!conn.address) return undefined;
@@ -36,251 +163,128 @@ export function Landing() {
     }
   }, [conn.address]);
 
-  function forget(hashToForget: string) {
-    removeFromHistory(hashToForget);
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    const h = hash.trim();
+    if (!h) return;
+    navigate(`/v/${h}`);
+  }
+
+  function onForget(h: string) {
+    removeFromHistory(h);
     setHistory(getHistory());
   }
 
   return (
-    <div data-screen-label="Landing">
-      {/* Hero — compact, with input inline. */}
-      <section className="hero-v2">
-        <div className="hero-v2-inner">
-          <span className="hero-eyebrow">
-            <span className="hero-dot" /> Neo N3 token vesting
-          </span>
-          <h1 className="hero-title">
-            Lock. <span className="grad">Vest.</span> <span className="grad">Claim.</span>
-          </h1>
-          <p className="hero-sub">
-            An audited, immutable vesting vault for any NEP-17 token. Deploy in one signed
-            transaction; beneficiaries claim straight from chain.
-          </p>
+    <div data-screen-label="Landing" className="nv-landing">
+      {/* Hero */}
+      <section className="nv-hero">
+        <div className="nv-eyebrow">Open-source · Neo N3</div>
+        <h1 className="page-title nv-title">Token vesting on Neo N3.</h1>
+        <p className="nv-lede">
+          NeoVest is a dashboard for token-vesting vaults — verifiable bytecode, owner-only
+          deposits, beneficiary-controlled claims. Paste a contract hash to open its
+          dashboard.
+        </p>
 
-          <form onSubmit={open} className="hero-input-row">
-            <input
-              className="input mono"
-              placeholder="0x… (paste a vault hash)"
-              value={hash}
-              onChange={(e) => setHash(e.target.value)}
-              spellCheck={false}
-            />
-            <button className="btn btn-primary btn-lg" type="submit">
-              Open <IconChevronRight size={14} />
-            </button>
-          </form>
-          <div className="hero-quick-links">
-            <Link to="/deploy" className="hero-link">
-              <IconLock size={12} /> Deploy a vault
-            </Link>
-            <span className="dot-sep" />
-            <Link to="/v/demo" className="hero-link">
-              <IconChevronRight size={12} /> Tour demo
-            </Link>
-          </div>
+        <form className="nv-lookup" onSubmit={onSubmit}>
+          <input
+            className="input mono"
+            placeholder="0x… vault contract hash"
+            value={hash}
+            onChange={(e) => setHash(e.target.value)}
+            spellCheck={false}
+            autoComplete="off"
+          />
+          <button className="btn btn-primary btn-lg" type="submit">
+            Open
+          </button>
+        </form>
+
+        <div className="nv-quicklinks">
+          <Link to="/deploy">
+            Deploy a vault<span className="nv-arrow">↗</span>
+          </Link>
+          <span className="nv-sep">·</span>
+          <Link to="/v/demo">
+            Tour the demo vault<span className="nv-arrow">↗</span>
+          </Link>
         </div>
       </section>
 
-      <div className="landing-body">
-        {/* Above-the-fold: vaults panel */}
-        <section className="vaults-panel">
-          <div className="panel-header">
-            <h2 className="panel-title">Your vaults</h2>
-            <span className="panel-meta">
-              {history.length === 0
-                ? 'Vaults you visit will appear here'
-                : `${history.length} recent`}
+      {/* Your vaults */}
+      {history.length > 0 && (
+        <section className="nv-section">
+          <div className="nv-section-head">
+            <span className="nv-section-label">Your vaults</span>
+            <span className="nv-section-meta">
+              {history.length} {history.length === 1 ? 'entry' : 'entries'}
             </span>
           </div>
-
-          {history.length === 0 ? (
-            <EmptyVaultsState />
-          ) : (
-            <div className="vaults-list">
-              {history.map((entry) => (
-                <HistoryRow key={entry.hash} entry={entry} meHash={meHash} onForget={forget} />
-              ))}
-            </div>
-          )}
-
-          {history.length > 0 && !conn.isConnected && (
-            <div className="panel-footer">
-              Connect a wallet on the Manage page to see role badges (owner, depositor, beneficiary)
-              next to each vault.
+          <ul className="nv-vault-list">
+            {history.map((h) => (
+              <VaultRow
+                key={h.hash}
+                entry={h}
+                meHash={meHash}
+                isConnected={conn.isConnected}
+                onForget={onForget}
+              />
+            ))}
+          </ul>
+          {!conn.isConnected && (
+            <div className="nv-section-foot">
+              Connect a wallet on the Manage page to see role badges (owner, depositor,
+              beneficiary) next to each vault.
             </div>
           )}
         </section>
+      )}
 
-        {/* Features (below the fold for newcomers) */}
-        <section className="feature-strip">
-          <FeatureCard
-            icon={<IconCheck size={16} />}
-            title="Verifiable bytecode"
-            body="Dashboard cross-checks the deployed contract's checksum against the bundled audited source."
-          />
-          <FeatureCard
-            icon={<IconStairs size={16} />}
-            title="Cliff + linear schedules"
-            body="One-shot cliffs or smooth linear vesting with optional cliffs. Beneficiaries see live curves."
-          />
-          <FeatureCard
-            icon={<IconClaim size={16} />}
-            title="Beneficiary-controlled"
-            body="The contract holds tokens. Beneficiaries claim directly. No hot wallet, no operator."
-          />
-          <FeatureCard
-            icon={<IconLock size={16} />}
-            title="Multi-token"
-            body="Any NEP-17 token, multiple per vault. One deployment for your project's whole vesting plan."
-          />
-        </section>
-
-        {/* Known deployments */}
-        {KNOWN_DEPLOYMENTS.length > 0 && (
-          <section style={{ marginTop: 32 }}>
-            <SectionHeader>Known deployments</SectionHeader>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {KNOWN_DEPLOYMENTS.map((d) => (
-                <Link
-                  key={d.hash}
-                  to={`/v/${d.hash}`}
-                  className="card card-pad-sm"
-                  style={{ textDecoration: 'none', color: 'inherit', display: 'flex', alignItems: 'center', gap: 12 }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: 14 }}>{d.name}</div>
-                    <div className="mono" style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{d.hash}</div>
-                    <div style={{ fontSize: 12, color: 'var(--text-tertiary)', marginTop: 2 }}>{d.description}</div>
-                  </div>
-                  <span className="badge">{d.network}</span>
-                  <IconChevronRight size={16} />
-                </Link>
-              ))}
-            </div>
-          </section>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function EmptyVaultsState() {
-  return (
-    <div className="vaults-empty">
-      <div className="vaults-empty-icon">
-        <IconLock size={20} />
-      </div>
-      <div className="vaults-empty-title">No vaults visited yet</div>
-      <div className="vaults-empty-body">
-        Paste a contract hash in the bar above, deploy a fresh vault, or open the demo.
-      </div>
-      <div className="vaults-empty-actions">
-        <Link to="/deploy" className="btn btn-primary btn-sm">
-          <IconLock size={12} /> Deploy
-        </Link>
-        <Link to="/v/demo" className="btn btn-secondary btn-sm">
-          Open demo <IconChevronRight size={12} />
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function FeatureCard({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
-  return (
-    <div className="feat">
-      <div className="feat-icon">{icon}</div>
-      <div className="feat-title">{title}</div>
-      <div className="feat-body">{body}</div>
-    </div>
-  );
-}
-
-function SectionHeader({ children }: { children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        fontSize: 11,
-        fontWeight: 600,
-        color: 'var(--text-tertiary)',
-        textTransform: 'uppercase',
-        letterSpacing: '0.06em',
-        marginBottom: 8,
-      }}
-    >
-      {children}
-    </div>
-  );
-}
-
-function HistoryRow({
-  entry,
-  meHash,
-  onForget,
-}: {
-  entry: VaultHistoryEntry;
-  meHash: string | undefined;
-  onForget: (hash: string) => void;
-}) {
-  const isDemo = entry.hash.toLowerCase() === 'demo';
-  const { data: roles } = useVaultRoles(entry.hash, meHash);
-  const visited = fmtRelative(new Date(entry.visitedAt), new Date());
-
-  return (
-    <Link to={`/v/${entry.hash}`} className="vault-row">
-      <div className="vault-row-icon">
-        <IconLock size={14} />
-      </div>
-      <div className="vault-row-main">
-        <div className="vault-row-title">
-          {isDemo ? 'Demo vault' : <span className="mono">{shortHash(entry.hash)}</span>}
+      {/* How it works */}
+      <section className="nv-section">
+        <div className="nv-section-head">
+          <span className="nv-section-label">How it works</span>
         </div>
-        <div className="vault-row-meta">last visited {visited}</div>
-      </div>
-      <div className="vault-row-badges">
-        {roles?.isOwner && <RoleBadge color="var(--accent)" label="Owner" />}
-        {roles?.isDepositor && <RoleBadge color="var(--info)" label="Depositor" />}
-        {roles?.isBeneficiary && <RoleBadge color="var(--success)" label="Beneficiary" />}
-      </div>
-      <button
-        className="vault-row-forget"
-        title="Forget"
-        aria-label="Forget vault"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onForget(entry.hash);
-        }}
-      >
-        ×
-      </button>
-      <IconChevronRight size={14} />
-    </Link>
-  );
-}
+        <ul className="nv-bullets">
+          {HOW_IT_WORKS.map((b, i) => (
+            <li key={i}>
+              <b>{b.t}</b> {b.d}
+            </li>
+          ))}
+        </ul>
+      </section>
 
-function RoleBadge({ color, label }: { color: string; label: string }) {
-  return (
-    <span
-      style={{
-        fontSize: 10.5,
-        fontWeight: 600,
-        textTransform: 'uppercase',
-        letterSpacing: '0.04em',
-        color,
-        background: `color-mix(in srgb, ${color} 14%, transparent)`,
-        border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
-        padding: '2px 8px',
-        borderRadius: 4,
-      }}
-    >
-      {label}
-    </span>
+      {/* Known deployments */}
+      {KNOWN_DEPLOYMENTS.length > 0 && (
+        <section className="nv-section">
+          <div className="nv-section-head">
+            <span className="nv-section-label">Known deployments</span>
+          </div>
+          <ul className="nv-deploy-list">
+            {KNOWN_DEPLOYMENTS.map((d) => (
+              <li
+                key={d.hash}
+                className="nv-deploy"
+                role="link"
+                tabIndex={0}
+                onClick={() => navigate(`/v/${d.hash}`)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') navigate(`/v/${d.hash}`);
+                }}
+              >
+                <span className="nv-deploy-net">{d.network}</span>
+                <div className="nv-deploy-main">
+                  <div className="nv-deploy-name">{d.name}</div>
+                  <div className="nv-deploy-hash">{d.hash}</div>
+                  {d.description && <div className="nv-deploy-desc">{d.description}</div>}
+                </div>
+                <span className="nv-deploy-arrow">→</span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
   );
-}
-
-function shortHash(s: string): string {
-  if (!s) return '';
-  if (s.length <= 14) return s;
-  return s.slice(0, 8) + '…' + s.slice(-6);
 }

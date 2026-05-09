@@ -88,9 +88,6 @@ Neo3 net via Docker and connecting NeoLine.
 
 ## Screenshots
 
-Captured from the bundled demo vault (`/v/demo`). To regenerate after UI
-changes, run the dev server and `node ui/scripts/screenshots.mjs`.
-
 **Landing.** Hero, vault history with role badges, and at-a-glance feature summary.
 
 ![Landing](docs/screenshots/landing.png)

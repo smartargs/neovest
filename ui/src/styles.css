@@ -577,6 +577,20 @@
   .input:focus { outline: none; border-color: var(--accent); }
   .input::placeholder { color: var(--text-quaternary); }
 
+  /* datetime-local inputs: tell the browser to render the calendar
+     picker indicator + spinners using the document's color scheme. */
+  .input[type="datetime-local"],
+  .input[type="date"],
+  .input[type="time"] {
+    color-scheme: light dark;
+  }
+  [data-theme="dark"] .input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+  [data-theme="dark"] .input[type="date"]::-webkit-calendar-picker-indicator,
+  [data-theme="dark"] .input[type="time"]::-webkit-calendar-picker-indicator {
+    filter: invert(1) brightness(1.2);
+    cursor: pointer;
+  }
+
   .input-search {
     position: relative;
     max-width: 320px;

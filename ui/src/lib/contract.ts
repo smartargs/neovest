@@ -138,6 +138,34 @@ export async function totalLocked(contractHash: string, tokenHash: string, netwo
   return asNumber(r.stack?.[0]);
 }
 
+export interface TokenInfo {
+  symbol: string;
+  decimals: number;
+  totalSupply: number;
+}
+
+/**
+ * Read NEP-17 metadata + totalSupply for a token contract via three test
+ * invokes. Returns null if any call faults.
+ */
+export async function getTokenInfo(tokenHash: string, network?: Network): Promise<TokenInfo | null> {
+  const client = getRpcClient(network);
+  try {
+    const [sym, dec, sup] = await Promise.all([
+      client.invokeFunction(stripHex(tokenHash), 'symbol'),
+      client.invokeFunction(stripHex(tokenHash), 'decimals'),
+      client.invokeFunction(stripHex(tokenHash), 'totalSupply'),
+    ]);
+    return {
+      symbol: asString(sym.stack?.[0]),
+      decimals: asNumber(dec.stack?.[0]),
+      totalSupply: asNumber(sup.stack?.[0]),
+    };
+  } catch {
+    return null;
+  }
+}
+
 /** Iterator-typed methods. Traverses the session iterator and returns lockIds. */
 async function readLockIdsByIndex(
   contractHash: string,

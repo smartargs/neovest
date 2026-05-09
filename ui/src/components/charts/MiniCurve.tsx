@@ -18,9 +18,13 @@ export function MiniCurve({ width = 280, height = 110, lock, today }: MiniCurveP
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
   if (!lock || !lock.start || !lock.end) return null;
+  if (!Number.isFinite(lock.amount) || lock.amount <= 0) return null;
 
   const t0 = lock.start.getTime();
-  const t1 = lock.end.getTime();
+  const tEnd = lock.end.getTime();
+  // Guard zero-duration schedules (cliff schedules where start === end). Pad
+  // the time axis so the step renders as a near-vertical jump instead of NaN.
+  const t1 = tEnd > t0 ? tEnd : t0 + 1;
   const points = 80;
   const pts: { t: number; v: number }[] = [];
   for (let i = 0; i < points; i++) {

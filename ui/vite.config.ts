@@ -52,4 +52,19 @@ export default defineConfig({
       },
     },
   },
+  // Dev-only same-origin proxy for the local Neo N3 chain. neo-cli's RpcServer
+  // doesn't emit CORS headers, so browsers reject direct fetches from a Vite
+  // dev origin (5173/5175) to localhost:10332. Routing through `/__rpc` keeps
+  // the request same-origin and Vite forwards to the chain.
+  // Override LOCAL_RPC_PROXY_TARGET to point at client2/consensus instead.
+  server: {
+    proxy: {
+      '/__rpc': {
+        target: process.env.LOCAL_RPC_PROXY_TARGET ?? 'http://localhost:10332',
+        changeOrigin: true,
+        ws: true,
+        rewrite: (p) => p.replace(/^\/__rpc/, ''),
+      },
+    },
+  },
 });

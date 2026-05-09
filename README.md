@@ -122,6 +122,7 @@ DEPLOYER_WIF=<wif> NEO_RPC=<rpc-url> ./gradlew :deploy:run
 
 ## Documentation
 
+- [`docs/LOCAL.md`](docs/LOCAL.md) — end-to-end local testing with a private Neo3 net
 - [`docs/DEPLOY.md`](docs/DEPLOY.md) — compile, test, deploy
 - [`docs/VERIFY.md`](docs/VERIFY.md) — confirm a deployed contract matches this source
 - [`docs/SCHEDULE.md`](docs/SCHEDULE.md) — vesting math reference

@@ -17,6 +17,34 @@ export function fmtNum(n: number | null | undefined, opts: FmtNumOpts = {}): str
   return n.toLocaleString('en-US', { maximumFractionDigits: decimals });
 }
 
+/**
+ * Format a raw on-chain token amount (smallest units) as a whole-token
+ * decimal string. e.g. {@code fmtTokenAmount(111100000000, 8)} → `"1,111"`.
+ *
+ * Trailing zeros in the fractional part are trimmed. Pass {@code compact}
+ * for K/M/B abbreviations on the whole part.
+ *
+ * @param tokenDecimals defaults to 8 (GAS / NEP-17 convention).
+ */
+export function fmtTokenAmount(
+  raw: number | bigint | null | undefined,
+  tokenDecimals = 8,
+  opts: FmtNumOpts = {},
+): string {
+  if (raw == null) return '—';
+  const r = typeof raw === 'bigint' ? raw : BigInt(Math.trunc(raw));
+  const factor = 10n ** BigInt(tokenDecimals);
+  const whole = r / factor;
+  const frac = r % factor;
+  const wholeNum = Number(whole);
+  if (opts.compact) {
+    return fmtNum(wholeNum + Number(frac) / Number(factor), { compact: true });
+  }
+  if (frac === 0n) return wholeNum.toLocaleString('en-US');
+  const fracStr = frac.toString().padStart(tokenDecimals, '0').replace(/0+$/, '');
+  return wholeNum.toLocaleString('en-US') + '.' + fracStr;
+}
+
 export interface FmtDateOpts {
   withYear?: boolean;
   short?: boolean;

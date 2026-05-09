@@ -1,8 +1,9 @@
 import { useState, useCallback, useMemo } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { CONTRACT, LOCKS, ME, TODAY, categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
-import { fmtDate, fmtNum, fmtRelative } from '@/lib/format';
+import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
+import { useAllLocks, useOwner } from '@/lib/hooks';
+import { fmtDate, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
 import {
@@ -18,33 +19,45 @@ import {
 import { MiniCurve } from '@/components/charts/MiniCurve';
 import { useConnection } from '@/lib/connection';
 import { claim as txClaim, revoke as txRevoke, createLock, waitForTx } from '@/lib/transactions';
+import { wallet as neonWallet } from '@cityofzion/neon-js';
 
 type Tab = 'beneficiary' | 'depositor' | 'create';
 
 export function Manage() {
-  const today = TODAY;
+  const today = useMemo(() => new Date(), []);
   const { contractHash } = useParams<{ contractHash: string }>();
   const conn = useConnection();
   const qc = useQueryClient();
 
-  const isDemo = !contractHash || contractHash === CONTRACT;
-  // Real address from wallet when connected; fall back to mock ME on the demo
-  // contract so screenshots still populate.
-  const me = conn.isConnected && conn.address
-    ? conn.address
-    : (isDemo ? ME : undefined);
+  const me = conn.isConnected ? conn.address : undefined;
+  // On-chain locks store dep/ben as 0x-scripthash; wallets give us N-addresses.
+  // Normalize the wallet side once for filtering.
+  const meHash = useMemo(() => {
+    if (!me) return undefined;
+    if (me.startsWith('0x')) return me.toLowerCase();
+    try {
+      return '0x' + neonWallet.getScriptHashFromAddress(me);
+    } catch {
+      return undefined;
+    }
+  }, [me]);
+  const { data: allLocks } = useAllLocks(contractHash ?? '');
+  const items: Lock[] = (allLocks ?? []) as unknown as Lock[];
 
   const [tab, setTab] = useState<Tab>('beneficiary');
   const [pendingTx, setPendingTx] = useState<{ kind: 'claim' | 'revoke'; lockId: number } | null>(null);
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; msg: string } | null>(null);
 
-  // For demo we still filter by mock ME / hardcoded depositor; for real we
-  // filter by the connected address (these are no-ops if the on-chain shape
-  // doesn't match — addresses are always strings).
-  const myBeneficiary = LOCKS.filter((l) => l.ben === me);
-  const myDepositor = isDemo
-    ? LOCKS.filter((l) => l.dep === '0xF7c2...91ad')
-    : LOCKS.filter((l) => l.dep === me);
+  // Filter the full lock list by the connected wallet's role.
+  // `dep`/`ben` are 0x-scripthashes set by the on-chain decoder.
+  const myBeneficiary = useMemo(
+    () => (meHash ? items.filter((l) => l.ben.toLowerCase() === meHash) : []),
+    [items, meHash],
+  );
+  const myDepositor = useMemo(
+    () => (meHash ? items.filter((l) => l.dep.toLowerCase() === meHash) : []),
+    [items, meHash],
+  );
 
   /** Submit a write tx and wait for confirmation. */
   const onClaim = useCallback(async (lockId: number) => {
@@ -56,7 +69,7 @@ export function Manage() {
     try {
       const txHash = await txClaim(conn.provider, contractHash, conn.address, lockId);
       setToast({ kind: 'ok', msg: 'Claim submitted, waiting for confirmation…' });
-      await waitForTx(txHash, (import.meta.env.VITE_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet');
+      await waitForTx(txHash);
       setToast({ kind: 'ok', msg: 'Claim confirmed.' });
       // Invalidate any queries that depend on this lock's state.
       void qc.invalidateQueries({ queryKey: ['claimable', contractHash, lockId] });
@@ -79,7 +92,7 @@ export function Manage() {
     try {
       const txHash = await txRevoke(conn.provider, contractHash, conn.address, lockId);
       setToast({ kind: 'ok', msg: 'Revoke submitted, waiting for confirmation…' });
-      await waitForTx(txHash, (import.meta.env.VITE_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet');
+      await waitForTx(txHash);
       setToast({ kind: 'ok', msg: 'Revoke confirmed.' });
       void qc.invalidateQueries({ queryKey: ['lock', contractHash, lockId] });
       void qc.invalidateQueries({ queryKey: ['allLocks', contractHash] });
@@ -97,12 +110,12 @@ export function Manage() {
           <h1 className="page-title">Manage locks</h1>
           <div className="page-subtitle">
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-              <span className="mono">0x7f3a...e2c1</span>
+              <span className="mono">{shortAddr(contractHash ?? '')}</span>
               <button
                 className="icon-btn"
                 style={{ width: 22, height: 22 }}
                 aria-label="Copy contract"
-                onClick={() => navigator.clipboard?.writeText(CONTRACT)}
+                onClick={() => contractHash && navigator.clipboard?.writeText(contractHash)}
               >
                 <IconCopy size={12} />
               </button>
@@ -162,8 +175,20 @@ export function Manage() {
 function extractMsg(e: unknown): string {
   if (e instanceof Error) return e.message;
   if (typeof e === 'object' && e !== null) {
-    const anyE = e as { description?: string; message?: string };
-    return anyE.description ?? anyE.message ?? JSON.stringify(e);
+    const anyE = e as {
+      description?: string;
+      message?: string;
+      data?: { exception?: string; message?: string };
+      exception?: string;
+    };
+    return (
+      anyE.exception ??
+      anyE.data?.exception ??
+      anyE.description ??
+      anyE.message ??
+      anyE.data?.message ??
+      JSON.stringify(e)
+    );
   }
   return String(e);
 }
@@ -204,15 +229,15 @@ function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps)
               Your locked tokens
             </div>
             <div className="mono" style={{ fontSize: 28, fontWeight: 500, letterSpacing: '-0.01em' }}>
-              {fmtNum(locks.reduce((s, l) => s + l.amount, 0))}
+              {fmtTokenAmount(locks.reduce((s, l) => s + l.amount, 0))}
               <span style={{ color: 'var(--text-secondary)', fontSize: 14, marginLeft: 8 }}>
-                LTC across {locks.length} locks
+                across {locks.length} locks
               </span>
             </div>
             <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
               Claimable now:{' '}
               <span className="mono" style={{ color: 'var(--success)', fontWeight: 600 }}>
-                {fmtNum(totalClaimable, { compact: true })} LTC
+                {fmtTokenAmount(totalClaimable, 8, { compact: true })}
               </span>
             </div>
           </div>
@@ -245,6 +270,7 @@ function BeneficiaryLockCard({
   onClaim: (lockId: number) => void | Promise<void>;
   pendingClaim: boolean;
 }) {
+  const { contractHash } = useParams<{ contractHash: string }>();
   const vested = vestedAt(lock, today);
   const claimable = Math.max(0, vested - (lock.claimed ?? 0));
   const pct = (vested / lock.amount) * 100;
@@ -263,7 +289,7 @@ function BeneficiaryLockCard({
           <span style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
         </div>
         <div className="lock-card-amount">
-          {fmtNum(lock.amount)} <span className="sym">LTC</span>
+          {fmtTokenAmount(lock.amount)}
         </div>
         <div className="lock-card-meta">
           {scheduleSummary(lock)} · {fmtDate(lock.start)} → {fmtDate(lock.end)}
@@ -276,7 +302,7 @@ function BeneficiaryLockCard({
           {claimable > 0 ? (
             <span style={{ color: 'var(--success)' }}>
               · Claimable:{' '}
-              <span className="mono" style={{ fontWeight: 500 }}>{fmtNum(claimable, { compact: true })} LTC</span>
+              <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(claimable, 8, { compact: true })}</span>
             </span>
           ) : isLocked && lock.cliff ? (
             <span>
@@ -298,12 +324,14 @@ function BeneficiaryLockCard({
             disabled={pendingClaim}
           >
             <IconClaim size={13} />
-            {pendingClaim ? 'Claiming…' : `Claim ${fmtNum(claimable, { compact: true })}`}
+            {pendingClaim ? 'Claiming…' : `Claim ${fmtTokenAmount(claimable, 8, { compact: true })}`}
           </button>
         ) : (
           <button className="btn btn-secondary btn-disabled">Not claimable</button>
         )}
-        <button className="btn btn-ghost btn-sm">View detail →</button>
+        <Link to={`/v/${contractHash}/lock/${lock.id}`} className="btn btn-ghost btn-sm">
+          View detail →
+        </Link>
       </div>
     </div>
   );
@@ -338,9 +366,9 @@ function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
             Locks you created
           </div>
           <div className="mono" style={{ fontSize: 28, fontWeight: 500, letterSpacing: '-0.01em' }}>
-            {fmtNum(total)}
+            {fmtTokenAmount(total)}
             <span style={{ color: 'var(--text-secondary)', fontSize: 14, marginLeft: 8 }}>
-              LTC across {locks.length} active · {revoked} revoked
+              across {locks.length} active · {revoked} revoked
             </span>
           </div>
         </div>
@@ -374,6 +402,7 @@ function DepositorLockCard({
   onRevoke: (lockId: number) => void | Promise<void>;
   pendingRevoke: boolean;
 }) {
+  const { contractHash } = useParams<{ contractHash: string }>();
   const vested = vestedAt(lock, today);
   const pct = (vested / lock.amount) * 100;
 
@@ -388,7 +417,7 @@ function DepositorLockCard({
           <span style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
         </div>
         <div className="lock-card-amount">
-          {fmtNum(lock.amount)} <span className="sym">LTC</span>
+          {fmtTokenAmount(lock.amount)}
         </div>
         <div className="lock-card-meta">
           {scheduleSummary(lock)} · Created {fmtDate(lock.start)} · Revocable:{' '}
@@ -402,7 +431,9 @@ function DepositorLockCard({
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-        <button className="btn btn-secondary">View detail →</button>
+        <Link to={`/v/${contractHash}/lock/${lock.id}`} className="btn btn-secondary">
+          View detail →
+        </Link>
         {lock.rev && (
           <button
             className={'btn btn-danger btn-sm' + (pendingRevoke ? ' btn-disabled' : '')}
@@ -425,6 +456,20 @@ function CreateLockTab({ today }: { today: Date }) {
   const { contractHash } = useParams<{ contractHash: string }>();
   const conn = useConnection();
   const qc = useQueryClient();
+  const { data: owner } = useOwner(contractHash ?? '');
+
+  // Connected wallet as 0x scripthash, for owner comparison.
+  const meHash = useMemo(() => {
+    if (!conn.address) return undefined;
+    if (conn.address.startsWith('0x')) return conn.address.toLowerCase();
+    try {
+      return '0x' + neonWallet.getScriptHashFromAddress(conn.address);
+    } catch {
+      return undefined;
+    }
+  }, [conn.address]);
+
+  const ownerMismatch = !!owner && !!meHash && owner.toLowerCase() !== meHash;
 
   // Default start = +1 minute (sufficient buffer past the next block).
   const defaultStart = useMemo(() => addSeconds(today, 60), [today]);
@@ -433,9 +478,14 @@ function CreateLockTab({ today }: { today: Date }) {
   const [scheduleType, setScheduleType] = useState<ScheduleType>('linear');
   const [revocable, setRevocable] = useState(false);
 
-  // All controlled fields.
-  const [tokenInput, setTokenInput] = useState('');
-  const [beneficiaryInput, setBeneficiaryInput] = useState('');
+  // All controlled fields. Token + beneficiary defaults are dev placeholders
+  // for fast localnet iteration: GAS contract hash + client1's address.
+  const [tokenInput, setTokenInput] = useState(
+    import.meta.env.DEV ? '0xd2a4cff31913016155e38e474a2c06d08be276cf' : '',
+  );
+  const [beneficiaryInput, setBeneficiaryInput] = useState(
+    import.meta.env.DEV ? 'NdihqSLYTf1B1WYuzhM52MNqvCNPJKLZaz' : '',
+  );
   const [amountInput, setAmountInput] = useState('');
   const [startInput, setStartInput] = useState(toLocalDatetime(defaultStart));
   const [endInput, setEndInput] = useState(toLocalDatetime(defaultEnd));
@@ -446,6 +496,7 @@ function CreateLockTab({ today }: { today: Date }) {
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<{ txHash: string; lockId?: number } | null>(null);
 
   // Parse + validate.
   const parsed = useMemo(() => parseLockForm({
@@ -502,21 +553,71 @@ function CreateLockTab({ today }: { today: Date }) {
         note: noteInput,
         revocable,
       });
-      await waitForTx(txHash, (import.meta.env.VITE_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet');
+      const log = await waitForTx(txHash);
+      const lockId = extractLockIdFromLog(log);
       // Invalidate dashboards/iterators so the new lock shows up.
       void qc.invalidateQueries({ queryKey: ['allLocks', contractHash] });
       void qc.invalidateQueries({ queryKey: ['lockCount', contractHash] });
-      // Reset the form for the next entry.
-      setAmountInput('');
-      setBeneficiaryInput('');
-      setNoteInput('');
+      setSuccess({ txHash, lockId });
       setSubmitError(null);
-      alert('Lock created. Tx: ' + txHash.slice(0, 10) + '…');
     } catch (e2) {
       setSubmitError(extractMsg(e2));
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (success) {
+    return (
+      <div className="card card-pad" style={{ textAlign: 'center', padding: '40px 24px', maxWidth: 560, margin: '0 auto' }}>
+        <div style={{ fontSize: 32, color: 'var(--success)', marginBottom: 8 }}>
+          <IconCheck size={36} />
+        </div>
+        <div className="card-title" style={{ fontSize: 18, marginBottom: 6 }}>Lock created</div>
+        <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+          Tokens have been transferred to the vault and the lock is on-chain.
+        </div>
+        <div style={{ marginBottom: 20, fontSize: 12, color: 'var(--text-secondary)', wordBreak: 'break-all' }}>
+          {success.lockId != null && (
+            <div style={{ marginBottom: 6 }}>
+              Lock ID:{' '}
+              <span className="mono" style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
+                #{success.lockId}
+              </span>
+            </div>
+          )}
+          <div>
+            Tx:{' '}
+            <span className="mono" style={{ color: 'var(--text-primary)' }}>
+              {success.txHash.slice(0, 10)}…{success.txHash.slice(-8)}
+            </span>
+            <button
+              className="icon-btn"
+              style={{ width: 22, height: 22, verticalAlign: 'middle', marginLeft: 4 }}
+              aria-label="Copy tx hash"
+              onClick={() => navigator.clipboard?.writeText(success.txHash)}
+            >
+              <IconCopy size={12} />
+            </button>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setAmountInput('');
+              setNoteInput('');
+              setSuccess(null);
+            }}
+          >
+            <IconAdd size={13} /> Create another
+          </button>
+          <Link to={`/v/${contractHash}`} className="btn btn-secondary">
+            View on dashboard
+          </Link>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -528,6 +629,25 @@ function CreateLockTab({ today }: { today: Date }) {
           according to the schedule below. One signed transaction.
         </div>
       </div>
+
+      {ownerMismatch && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: '10px 14px',
+            background: 'var(--warning-muted)',
+            color: 'var(--text-primary)',
+            border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
+            borderRadius: 6,
+            fontSize: 12.5,
+          }}
+        >
+          <strong style={{ color: 'var(--warning)' }}>Connected wallet is not the vault owner.</strong>{' '}
+          Only <span className="mono">{shortAddr(owner ?? '')}</span> can create locks here. You're
+          connected as <span className="mono">{shortAddr(meHash ?? '')}</span>. Switch wallets in
+          NeoLine to continue.
+        </div>
+      )}
 
       <div className="form-grid">
         <div className="card card-pad form-section">
@@ -609,6 +729,7 @@ function CreateLockTab({ today }: { today: Date }) {
               <input
                 className="input mono"
                 type="datetime-local"
+                min={toLocalDatetime(today)}
                 value={startInput}
                 onChange={(e) => setStartInput(e.target.value)}
               />
@@ -619,6 +740,7 @@ function CreateLockTab({ today }: { today: Date }) {
                 <input
                   className="input mono"
                   type="datetime-local"
+                  min={startInput || toLocalDatetime(today)}
                   value={endInput}
                   onChange={(e) => setEndInput(e.target.value)}
                 />
@@ -634,6 +756,8 @@ function CreateLockTab({ today }: { today: Date }) {
               <input
                 className="input mono"
                 type="datetime-local"
+                min={startInput || toLocalDatetime(today)}
+                max={endInput || undefined}
                 value={cliffInput}
                 onChange={(e) => setCliffInput(e.target.value)}
               />
@@ -712,8 +836,9 @@ function CreateLockTab({ today }: { today: Date }) {
             </div>
             <button
               type="submit"
-              className={'btn btn-primary btn-lg' + ((!parsed.ok || submitting) ? ' btn-disabled' : '')}
-              disabled={!parsed.ok || submitting}
+              className={'btn btn-primary btn-lg' + ((!parsed.ok || submitting || ownerMismatch) ? ' btn-disabled' : '')}
+              disabled={!parsed.ok || submitting || ownerMismatch}
+              title={ownerMismatch ? 'Connected wallet is not the vault owner.' : undefined}
             >
               <IconLock size={14} /> {submitting ? 'Creating…' : 'Create lock'}
             </button>
@@ -877,6 +1002,7 @@ function parseLockForm(f: RawLockForm): ParsedLockForm {
   }
 
   // Linear
+  if (startSec <= nowSec + 30) return { ok: false, error: 'Start date must be at least ~30s in the future.' };
   const endSec = parseLocalDatetime(f.endInput);
   if (!endSec) return { ok: false, error: 'Invalid end date.' };
   if (endSec <= startSec) return { ok: false, error: 'End must be after start.' };
@@ -897,9 +1023,7 @@ function normalizeHashOrAddress(s: string): string | null {
   if (/^0x[0-9a-fA-F]{40}$/.test(t)) return t.toLowerCase();
   if (/^N[A-Za-z0-9]{33}$/.test(t)) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { wallet } = require('@cityofzion/neon-js');
-      return '0x' + wallet.getScriptHashFromAddress(t);
+      return '0x' + neonWallet.getScriptHashFromAddress(t);
     } catch {
       return null;
     }
@@ -939,4 +1063,24 @@ function shortAddr(s: string): string {
   if (!s) return '';
   if (s.length <= 14) return s;
   return s.slice(0, 6) + '…' + s.slice(-4);
+}
+
+/** Pull the lock id from the contract's `LockCreated` event in an applog. */
+function extractLockIdFromLog(log: unknown): number | undefined {
+  type Notif = { eventname?: string; state?: { value?: { type?: string; value?: string }[] } };
+  type Exec = { notifications?: Notif[] };
+  type Log = { executions?: Exec[] };
+  const execs = (log as Log)?.executions ?? [];
+  for (const e of execs) {
+    for (const n of e.notifications ?? []) {
+      if (n.eventname !== 'LockCreated') continue;
+      const items = n.state?.value;
+      if (!items || items.length === 0) continue;
+      const v = items[0].value;
+      if (v == null) continue;
+      const id = Number(v);
+      return Number.isFinite(id) ? id : undefined;
+    }
+  }
+  return undefined;
 }

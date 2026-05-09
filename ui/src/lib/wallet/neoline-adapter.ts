@@ -12,7 +12,15 @@
  */
 
 import type { ContractInvocationMulti, Arg } from '@cityofzion/neon-dappkit-types';
+import { wallet as neonWallet } from '@cityofzion/neon-js';
 import type { NeoLineN3, NeoLineArg, NeoLineSigner } from './neoline-types';
+
+/** N-address → 0x-hex scripthash. Pass-through for already-hex inputs. */
+function toScriptHash(addrOrHash: string): string {
+  const t = addrOrHash.trim();
+  if (t.startsWith('0x') && t.length === 42) return t.toLowerCase();
+  return '0x' + neonWallet.getScriptHashFromAddress(t);
+}
 
 /**
  * Resolve the dAPI client. The extension injects {@code window.NEOLineN3}
@@ -87,8 +95,10 @@ export async function buildNeoLineProvider(): Promise<NeoLineProviderShape> {
     async invokeFunction(req: ContractInvocationMulti): Promise<string> {
       // ContractInvocationMulti is a list of invocations + a list of signers.
       // NeoLine has separate methods for single vs multiple invocations.
+      // signer.account must be a 0x-hex scripthash — NeoLine's internal
+      // neon-js call hits `Expected a hexstring` if you pass an N-address.
       const signers: NeoLineSigner[] = (req.signers ?? []).map((s) => ({
-        account: (s as { account?: string }).account ?? acct.address,
+        account: toScriptHash((s as { account?: string }).account ?? acct.address),
         scopes: (s as { scopes?: number | string }).scopes ?? 'CalledByEntry',
       }));
 

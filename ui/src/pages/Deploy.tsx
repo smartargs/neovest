@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useConnection } from '@/lib/connection';
+import { defaultNetwork, type Network } from '@/lib/rpc';
 import {
   deployVault,
+  extractDeployedContractHash,
   fmtGas,
   getBundledManifestName,
   getBundledNefSize,
@@ -60,7 +62,7 @@ export function Deploy() {
   }, [conn.address, manifestName]);
 
   const ownerValid = isValidNeoAddressOrHash(ownerInput);
-  const network = (import.meta.env.VITE_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet';
+  const network = defaultNetwork();
 
   async function handleDeploy() {
     setError(null);
@@ -80,7 +82,14 @@ export function Deploy() {
       });
       setResult(r);
       // Tx submitted; wait for inclusion before claiming success.
-      await waitForTx(r.txHash, network);
+      const log = await waitForTx(r.txHash);
+      // Replace the locally predicted hash with the real one from the Deploy
+      // notification — our prediction drifts from neo-cli's calcContractHash
+      // for some integer encodings.
+      const realHash = extractDeployedContractHash(log);
+      if (realHash) {
+        setResult({ txHash: r.txHash, contractHash: realHash });
+      }
       setStage('success');
     } catch (e) {
       setError(extractMsg(e));
@@ -287,7 +296,7 @@ interface ReviewProps {
   predictedHash: string | null;
   nefSize: number;
   manifestName: string;
-  network: 'mainnet' | 'testnet';
+  network: Network;
   onBack: () => void;
   onConfirm: () => void;
 }
@@ -314,8 +323,6 @@ function ReviewStage({
       .catch((e: unknown) => {
         if (cancelled) return;
         const msg = e instanceof Error ? e.message : String(e);
-        // Also dump to the console so the full error chain is grep-able.
-        console.error('[predictDeployFee] failed:', e);
         setFeeError(msg);
         setFeeLoading(false);
       });
@@ -353,20 +360,36 @@ function ReviewStage({
           )}
         </dd>
       </dl>
-      {feeError && (
-        <div
-          style={{
-            padding: '8px 12px',
-            background: 'var(--danger-muted)',
-            color: 'var(--danger)',
-            borderRadius: 6,
-            fontSize: 12,
-            wordBreak: 'break-word',
-          }}
-        >
-          <strong>Fee preview failed:</strong> {feeError}
-        </div>
-      )}
+      {feeError && (() => {
+        // If the chain is telling us the contract already exists, that's
+        // actually a successful prior deploy — surface the existing hash and
+        // point at its dashboard instead of showing a generic error.
+        const existing = feeError.match(/Contract Already Exists:\s*(0x[0-9a-fA-F]{40})/);
+        if (existing) {
+          return (
+            <div style={{ padding: '8px 12px', background: 'var(--info-muted)', color: 'var(--text-primary)', borderRadius: 6, fontSize: 12.5 }}>
+              A vault with these exact parameters is already deployed at{' '}
+              <Link to={`/v/${existing[1]}`} className="mono" style={{ color: 'var(--accent)' }}>{existing[1]}</Link>.
+              <br />
+              To deploy a fresh one, use a different deployer account or reset the chain.
+            </div>
+          );
+        }
+        return (
+          <div
+            style={{
+              padding: '8px 12px',
+              background: 'var(--danger-muted)',
+              color: 'var(--danger)',
+              borderRadius: 6,
+              fontSize: 12,
+              wordBreak: 'break-word',
+            }}
+          >
+            <strong>Fee preview failed:</strong> {feeError}
+          </div>
+        );
+      })()}
 
       <div
         style={{

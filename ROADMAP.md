@@ -62,11 +62,3 @@ migrate(int lockId, Hash160 newVault):
 - End-to-end: deploy v1 + v2, create lock in v1, migrate, verify v2 lock is
   claimable on the same effective schedule.
 
-## UI
-
-### Stepped vesting in Create Lock — `[open]`
-
-The contract supports stepped schedules; the UI form does not. Needs:
-- Tranche editor (add row / remove row).
-- Per-tranche timestamp + amount inputs that sum to the lock total.
-- Serialization to the `tranches` `ByteString` the contract expects.

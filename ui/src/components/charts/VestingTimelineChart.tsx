@@ -1,4 +1,4 @@
-import { CATEGORIES } from '@/lib/data';
+import { CATEGORIES, categoryColor } from '@/lib/data';
 import type { TimelineSeries } from '@/lib/data';
 import { fmtNum } from '@/lib/format';
 
@@ -137,8 +137,8 @@ export function VestingTimelineChart({
           ' Z';
         return (
           <g key={c.id}>
-            <path d={fillPath} fill={`var(--cat-${c.id})`} fillOpacity="var(--chart-fill-opacity)" />
-            <path d={topPath} fill="none" stroke={`var(--cat-${c.id})`} strokeWidth="1.5" />
+            <path d={fillPath} fill={categoryColor(c.id)} fillOpacity="var(--chart-fill-opacity)" />
+            <path d={topPath} fill="none" stroke={categoryColor(c.id)} strokeWidth="1.5" />
           </g>
         );
       })}

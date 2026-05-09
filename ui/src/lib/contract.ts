@@ -98,6 +98,19 @@ export async function claimableAmount(contractHash: string, lockId: number, netw
   return asNumber(r.stack?.[0]);
 }
 
+/** Returns the vault's bound owner — the only address allowed to deposit. */
+export async function getOwner(contractHash: string, network?: Network): Promise<string | null> {
+  const client = getRpcClient(network);
+  try {
+    const r = await client.invokeFunction(stripHex(contractHash), 'getOwner');
+    const top = r.stack?.[0];
+    if (!top || top.type === 'Any' || top.value == null) return null;
+    return asHash160(top);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch the deployed contract's state (NEF + manifest) via RPC. Used to
  * verify the deployed bytecode's checksum against the expected one bundled

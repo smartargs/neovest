@@ -58,10 +58,13 @@ export interface NeoLineN3 {
   }>;
 }
 
+// NeoLine's dAPI is exposed as a class constructor — instantiate with
+// `new window.NEOLineN3.Init()` (sync), then call async methods on the
+// instance. See https://neoline.io/dapi/N3.html.
 declare global {
   interface Window {
-    NEOLineN3?: { Init(): Promise<NeoLineN3> };
-    NEOLine?: { Init(): Promise<unknown> };
+    NEOLineN3?: { Init: new () => NeoLineN3 };
+    NEOLine?: { Init: new () => unknown };
   }
 }
 

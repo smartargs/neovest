@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "sync-checksum": "node scripts/sync-checksum.mjs",
-    "predev": "npm run sync-checksum",
-    "prebuild": "npm run sync-checksum",
+    "sync-artifacts": "node scripts/sync-artifacts.mjs",
+    "sync": "npm run sync-checksum && npm run sync-artifacts",
+    "predev": "npm run sync",
+    "prebuild": "npm run sync",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",

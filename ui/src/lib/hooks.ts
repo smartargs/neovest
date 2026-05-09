@@ -115,6 +115,19 @@ export function useClaimable(contractHash: string, lockId: number | undefined) {
   });
 }
 
+/** The vault owner — the address authorized to deposit / create new locks. */
+export function useOwner(contractHash: string) {
+  return useQuery({
+    queryKey: ['owner', contractHash],
+    queryFn: () => {
+      if (isDemo(contractHash)) return null; // mock data has no real owner
+      return contract.getOwner(contractHash);
+    },
+    enabled: !!contractHash,
+    staleTime: 60 * 60 * 1000, // owner is immutable
+  });
+}
+
 export function useTotalLocked(contractHash: string, tokenHash: string | undefined) {
   return useQuery({
     queryKey: ['totalLocked', contractHash, tokenHash],

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { CONTRACT, LOCKS, ME, TODAY, categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
@@ -9,7 +9,6 @@ import {
   IconAdd,
   IconAlert,
   IconCheck,
-  IconChevronDown,
   IconClaim,
   IconCopy,
   IconLock,
@@ -18,7 +17,7 @@ import {
 } from '@/components/icons';
 import { MiniCurve } from '@/components/charts/MiniCurve';
 import { useConnection } from '@/lib/connection';
-import { claim as txClaim, revoke as txRevoke, waitForTx } from '@/lib/transactions';
+import { claim as txClaim, revoke as txRevoke, createLock, waitForTx } from '@/lib/transactions';
 
 type Tab = 'beneficiary' | 'depositor' | 'create';
 
@@ -423,66 +422,154 @@ function DepositorLockCard({
 type ScheduleType = 'cliff' | 'linear' | 'stepped';
 
 function CreateLockTab({ today }: { today: Date }) {
+  const { contractHash } = useParams<{ contractHash: string }>();
+  const conn = useConnection();
+  const qc = useQueryClient();
+
+  // Default start = +1 minute (sufficient buffer past the next block).
+  const defaultStart = useMemo(() => addSeconds(today, 60), [today]);
+  const defaultEnd = useMemo(() => addSeconds(defaultStart, 60 * 60 * 24 * 365), [defaultStart]);
+
   const [scheduleType, setScheduleType] = useState<ScheduleType>('linear');
   const [revocable, setRevocable] = useState(false);
 
-  const previewLock = {
-    cat: 'team',
+  // All controlled fields.
+  const [tokenInput, setTokenInput] = useState('');
+  const [beneficiaryInput, setBeneficiaryInput] = useState('');
+  const [amountInput, setAmountInput] = useState('');
+  const [startInput, setStartInput] = useState(toLocalDatetime(defaultStart));
+  const [endInput, setEndInput] = useState(toLocalDatetime(defaultEnd));
+  const [cliffInput, setCliffInput] = useState('');
+  const [categoryInput, setCategoryInput] = useState<string>('team');
+  const [noteInput, setNoteInput] = useState('');
+  const [decimals] = useState(8); // assumed; production UI would fetch via NEP-17
+
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Parse + validate.
+  const parsed = useMemo(() => parseLockForm({
+    tokenInput, beneficiaryInput, amountInput,
+    startInput, endInput, cliffInput,
+    categoryInput, noteInput,
+    scheduleType, revocable, decimals,
+  }), [tokenInput, beneficiaryInput, amountInput, startInput, endInput, cliffInput,
+       categoryInput, noteInput, scheduleType, revocable, decimals]);
+
+  const previewLock: Lock = useMemo(() => ({
+    id: 0,
+    cat: categoryInput,
     type: scheduleType,
-    start: new Date('2026-05-09T00:00:00Z'),
-    end: new Date('2030-05-09T00:00:00Z'),
-    cliff: scheduleType === 'linear' ? new Date('2027-05-09T00:00:00Z') : null,
-    steps: 8,
-    amount: 1_200_000_000,
-  };
+    start: parsed.ok ? new Date(parsed.startSec * 1000) : defaultStart,
+    end:   parsed.ok ? new Date(parsed.endSec * 1000)   : defaultEnd,
+    cliff: parsed.ok && parsed.cliffSec ? new Date(parsed.cliffSec * 1000) : undefined,
+    amount: parsed.ok ? Number(parsed.amountRaw) : 1_000_000_00,
+    rev: revocable,
+    ben: beneficiaryInput || '0xA1b3…3Bf2',
+    dep: conn.address ?? '',
+    label: noteInput,
+    claimed: 0,
+  } as Lock), [categoryInput, scheduleType, parsed, defaultStart, defaultEnd, revocable, beneficiaryInput, conn.address, noteInput]);
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSubmitError(null);
+    if (!conn.provider || !conn.address) {
+      setSubmitError('Connect a wallet first.');
+      return;
+    }
+    if (!contractHash) {
+      setSubmitError('No vault hash in URL.');
+      return;
+    }
+    if (!parsed.ok) {
+      setSubmitError(parsed.error);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const txHash = await createLock(conn.provider, {
+        tokenHash: parsed.tokenHash,
+        vaultHash: contractHash,
+        fromAddress: conn.address,
+        beneficiaryHash: parsed.beneficiaryHash,
+        amount: parsed.amountRaw,
+        scheduleType,
+        startTime: parsed.startSec,
+        endTime: parsed.endSec,
+        cliffTime: parsed.cliffSec ?? 0,
+        category: categoryInput,
+        note: noteInput,
+        revocable,
+      });
+      await waitForTx(txHash, (import.meta.env.VITE_NETWORK ?? 'mainnet') as 'mainnet' | 'testnet');
+      // Invalidate dashboards/iterators so the new lock shows up.
+      void qc.invalidateQueries({ queryKey: ['allLocks', contractHash] });
+      void qc.invalidateQueries({ queryKey: ['lockCount', contractHash] });
+      // Reset the form for the next entry.
+      setAmountInput('');
+      setBeneficiaryInput('');
+      setNoteInput('');
+      setSubmitError(null);
+      alert('Lock created. Tx: ' + txHash.slice(0, 10) + '…');
+    } catch (e2) {
+      setSubmitError(extractMsg(e2));
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
-    <div>
+    <form onSubmit={onSubmit}>
       <div style={{ marginBottom: 20 }}>
         <div className="card-title" style={{ fontSize: 18, marginBottom: 4 }}>Create a new lock</div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 700 }}>
-          Tokens are pulled from your wallet and locked according to the schedule below. Once created, locks are
-          immutable unless explicitly marked revocable.
+          Only the vault owner can deposit. Tokens are transferred from the connected wallet and locked
+          according to the schedule below. One signed transaction.
         </div>
       </div>
 
       <div className="form-grid">
         <div className="card card-pad form-section">
           <div className="field">
-            <label>Token</label>
-            <div className="field-row">
-              <div className="token-selector" style={{ flex: 1 }}>
-                <span className="token-logo">L</span>
-                <div style={{ flex: 1 }}>
-                  <div className="name">Lattice (LTC)</div>
-                  <div className="total mono">Balance: 9,512,300,000</div>
-                </div>
-                <IconChevronDown />
-              </div>
-            </div>
+            <label>Token contract</label>
+            <input
+              className="input mono"
+              placeholder="0x… NEP-17 contract hash"
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              spellCheck={false}
+            />
+            <span className="hint">
+              Any NEP-17 token. Must be one the wallet holds.{' '}
+              {!!parsed.tokenHash && parsed.ok && <span className="ok"><IconCheck size={12} /> Valid</span>}
+            </span>
           </div>
 
           <div className="field">
             <label>Beneficiary</label>
-            <input className="input mono" defaultValue="0xA1b33Bf28d2c4e8f9a1b4c7e2d5f8a91" />
-            <span className="ok"><IconCheck size={12} /> Valid Neo address · 0xA1b3…3Bf2</span>
+            <input
+              className="input mono"
+              placeholder="N… (Neo3 address) or 0x… (scripthash)"
+              value={beneficiaryInput}
+              onChange={(e) => setBeneficiaryInput(e.target.value)}
+              spellCheck={false}
+            />
           </div>
 
           <div className="field">
             <label>Amount</label>
             <div className="amount-input">
-              <input className="input" defaultValue="1,200,000,000" />
-              <span className="sym">LTC</span>
+              <input
+                className="input"
+                placeholder="1.0"
+                value={amountInput}
+                onChange={(e) => setAmountInput(e.target.value)}
+                inputMode="decimal"
+              />
+              <span className="sym">{decimals}d</span>
             </div>
-            <div className="quick-pcts">
-              <button>25%</button>
-              <button>50%</button>
-              <button>Max</button>
-              <span style={{ flex: 1 }} />
-              <span style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }} className="mono">
-                ≈ 12.6% of balance
-              </span>
-            </div>
+            <span className="hint">Amount in whole token units (assumes 8 decimals).</span>
           </div>
 
           <div className="field">
@@ -505,11 +592,12 @@ function CreateLockTab({ today }: { today: Date }) {
                 <div className="desc">Vest continuously between two dates, optional cliff.</div>
               </div>
               <div
-                className={'radio-card ' + (scheduleType === 'stepped' ? 'active' : '')}
-                onClick={() => setScheduleType('stepped')}
+                className={'radio-card btn-disabled'}
+                title="Stepped vesting requires off-chain tranche serialization — coming soon."
+                style={{ cursor: 'not-allowed', opacity: 0.55 }}
               >
                 <IconStairs className="ic" size={16} />
-                <div className="name">Stepped</div>
+                <div className="name">Stepped (soon)</div>
                 <div className="desc">Unlock equal tranches at fixed intervals.</div>
               </div>
             </div>
@@ -517,13 +605,25 @@ function CreateLockTab({ today }: { today: Date }) {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div className="field">
-              <label>Start date</label>
-              <input className="input mono" defaultValue="2026-05-09 00:00 UTC" />
+              <label>{scheduleType === 'cliff' ? 'Unlock date' : 'Start date'}</label>
+              <input
+                className="input mono"
+                type="datetime-local"
+                value={startInput}
+                onChange={(e) => setStartInput(e.target.value)}
+              />
             </div>
-            <div className="field">
-              <label>End date</label>
-              <input className="input mono" defaultValue="2030-05-09 00:00 UTC" />
-            </div>
+            {scheduleType === 'linear' && (
+              <div className="field">
+                <label>End date</label>
+                <input
+                  className="input mono"
+                  type="datetime-local"
+                  value={endInput}
+                  onChange={(e) => setEndInput(e.target.value)}
+                />
+              </div>
+            )}
           </div>
 
           {scheduleType === 'linear' && (
@@ -531,24 +631,23 @@ function CreateLockTab({ today }: { today: Date }) {
               <label>
                 Cliff <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>(optional)</span>
               </label>
-              <input className="input mono" defaultValue="2027-05-09 00:00 UTC" />
-              <span className="hint">No tokens vest before this date.</span>
-            </div>
-          )}
-
-          {scheduleType === 'stepped' && (
-            <div className="field">
-              <label>Number of tranches</label>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <input className="input mono" defaultValue="8" style={{ maxWidth: 100 }} />
-                <span className="hint">150,000,000 LTC unlocks every ~6 months.</span>
-              </div>
+              <input
+                className="input mono"
+                type="datetime-local"
+                value={cliffInput}
+                onChange={(e) => setCliffInput(e.target.value)}
+              />
+              <span className="hint">No tokens vest before this date. Leave empty for none.</span>
             </div>
           )}
 
           <div className="field">
             <label>Category</label>
-            <select className="select" defaultValue="team">
+            <select
+              className="select"
+              value={categoryInput}
+              onChange={(e) => setCategoryInput(e.target.value)}
+            >
               <option value="team">Team</option>
               <option value="investor">Investors</option>
               <option value="treasury">Treasury</option>
@@ -562,10 +661,15 @@ function CreateLockTab({ today }: { today: Date }) {
             <label>
               Note <span style={{ color: 'var(--text-tertiary)', fontWeight: 400 }}>(optional, public)</span>
             </label>
-            <input className="input" defaultValue="Founder allocation" />
+            <input
+              className="input"
+              value={noteInput}
+              onChange={(e) => setNoteInput(e.target.value)}
+              maxLength={256}
+            />
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span className="hint">Stored on-chain. Visible to everyone.</span>
-              <span className="hint mono">21 / 256</span>
+              <span className="hint mono">{noteInput.length} / 256</span>
             </div>
           </div>
 
@@ -577,6 +681,28 @@ function CreateLockTab({ today }: { today: Date }) {
             </div>
           </div>
 
+          {!parsed.ok && (parsed as { error: string }).error && (amountInput || beneficiaryInput || tokenInput) && (
+            <div
+              style={{
+                padding: '8px 12px', background: 'var(--warning-muted)',
+                color: 'var(--warning)', borderRadius: 6, fontSize: 12,
+              }}
+            >
+              {(parsed as { error: string }).error}
+            </div>
+          )}
+
+          {submitError && (
+            <div
+              style={{
+                padding: '8px 12px', background: 'var(--danger-muted)',
+                color: 'var(--danger)', borderRadius: 6, fontSize: 12, wordBreak: 'break-word',
+              }}
+            >
+              {submitError}
+            </div>
+          )}
+
           <div className="divider" />
 
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
@@ -584,8 +710,12 @@ function CreateLockTab({ today }: { today: Date }) {
               <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>One transaction.</strong> Tokens
               transfer to the vault with your lock parameters attached.
             </div>
-            <button className="btn btn-primary btn-lg">
-              <IconLock size={14} /> Create lock
+            <button
+              type="submit"
+              className={'btn btn-primary btn-lg' + ((!parsed.ok || submitting) ? ' btn-disabled' : '')}
+              disabled={!parsed.ok || submitting}
+            >
+              <IconLock size={14} /> {submitting ? 'Creating…' : 'Create lock'}
             </button>
           </div>
         </div>
@@ -615,23 +745,26 @@ function CreateLockTab({ today }: { today: Date }) {
             </div>
 
             <dl className="dl">
-              <dt>Beneficiary</dt><dd>0xA1b3…3Bf2</dd>
-              <dt>Amount</dt><dd>1,200,000,000 LTC</dd>
+              <dt>Beneficiary</dt>
+              <dd>{beneficiaryInput ? shortAddr(beneficiaryInput) : '—'}</dd>
+              <dt>Amount</dt>
+              <dd>{amountInput ? `${amountInput}` : '—'}</dd>
               <dt>Type</dt>
               <dd>
-                {scheduleType === 'linear'
-                  ? 'Linear with cliff'
-                  : scheduleType === 'cliff'
+                {scheduleType === 'cliff'
                   ? 'Cliff'
-                  : 'Stepped'}
+                  : (parsed.ok && parsed.cliffSec ? 'Linear with cliff' : 'Linear')}
               </dd>
-              <dt>Starts</dt><dd>May 9, 2026</dd>
-              {scheduleType === 'linear' && (<><dt>Cliff ends</dt><dd>May 9, 2027</dd></>)}
-              {scheduleType === 'stepped' && (<><dt>Tranches</dt><dd>8 × 150M LTC</dd></>)}
-              <dt>Fully vested</dt><dd>May 9, 2030</dd>
-              <dt>First claim</dt><dd>May 9, 2027</dd>
-              <dt style={{ paddingLeft: 12, color: 'var(--text-tertiary)' }}>↳ amount</dt>
-              <dd style={{ color: 'var(--success)', fontWeight: 500 }}>300,000,000 LTC</dd>
+              <dt>Starts</dt>
+              <dd>{parsed.ok ? fmtDate(new Date(parsed.startSec * 1000)) : '—'}</dd>
+              {scheduleType === 'linear' && parsed.ok && parsed.cliffSec && (
+                <>
+                  <dt>Cliff ends</dt>
+                  <dd>{fmtDate(new Date(parsed.cliffSec * 1000))}</dd>
+                </>
+              )}
+              <dt>Fully vested</dt>
+              <dd>{parsed.ok ? fmtDate(new Date(parsed.endSec * 1000)) : '—'}</dd>
             </dl>
 
             <div className="divider" />
@@ -656,7 +789,9 @@ function CreateLockTab({ today }: { today: Date }) {
                 >
                   Network fee
                 </div>
-                <div className="mono" style={{ fontSize: 13, color: 'var(--text-primary)' }}>~0.082 GAS</div>
+                <div className="mono" style={{ fontSize: 13, color: 'var(--text-primary)' }}>
+                  shown by wallet
+                </div>
               </div>
               <div
                 style={{
@@ -683,6 +818,125 @@ function CreateLockTab({ today }: { today: Date }) {
           </div>
         </div>
       </div>
-    </div>
+    </form>
   );
+}
+
+// ---------- Create-lock helpers ----------
+
+interface RawLockForm {
+  tokenInput: string;
+  beneficiaryInput: string;
+  amountInput: string;
+  startInput: string;
+  endInput: string;
+  cliffInput: string;
+  categoryInput: string;
+  noteInput: string;
+  scheduleType: ScheduleType;
+  revocable: boolean;
+  decimals: number;
+}
+
+type ParsedLockForm =
+  | {
+      ok: true;
+      tokenHash: string;
+      beneficiaryHash: string;
+      amountRaw: bigint;
+      startSec: number;
+      endSec: number;
+      cliffSec: number | undefined;
+    }
+  | { ok: false; error: string; tokenHash?: undefined; beneficiaryHash?: undefined };
+
+function parseLockForm(f: RawLockForm): ParsedLockForm {
+  if (f.scheduleType === 'stepped') {
+    return { ok: false, error: 'Stepped vesting is not yet supported in the UI form.' };
+  }
+  if (!f.tokenInput.trim()) return { ok: false, error: 'Token contract hash required.' };
+  if (!f.beneficiaryInput.trim()) return { ok: false, error: 'Beneficiary required.' };
+  if (!f.amountInput.trim()) return { ok: false, error: 'Amount required.' };
+
+  const tokenHash = normalizeHashOrAddress(f.tokenInput);
+  if (!tokenHash) return { ok: false, error: 'Token must be a valid 0x… contract hash.' };
+  const beneficiaryHash = normalizeHashOrAddress(f.beneficiaryInput);
+  if (!beneficiaryHash) return { ok: false, error: 'Beneficiary must be a valid Neo3 address or 0x scripthash.' };
+
+  const amountRaw = parseAmount(f.amountInput, f.decimals);
+  if (amountRaw === null) return { ok: false, error: 'Amount must be a positive number.' };
+  if (amountRaw <= 0n) return { ok: false, error: 'Amount must be > 0.' };
+
+  const startSec = parseLocalDatetime(f.startInput);
+  if (!startSec) return { ok: false, error: 'Invalid start date.' };
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  if (f.scheduleType === 'cliff') {
+    if (startSec <= nowSec + 30) return { ok: false, error: 'Cliff date must be at least ~30s in the future.' };
+    return { ok: true, tokenHash, beneficiaryHash, amountRaw, startSec, endSec: startSec, cliffSec: undefined };
+  }
+
+  // Linear
+  const endSec = parseLocalDatetime(f.endInput);
+  if (!endSec) return { ok: false, error: 'Invalid end date.' };
+  if (endSec <= startSec) return { ok: false, error: 'End must be after start.' };
+
+  let cliffSec: number | undefined;
+  if (f.cliffInput.trim()) {
+    const c = parseLocalDatetime(f.cliffInput);
+    if (!c) return { ok: false, error: 'Invalid cliff date.' };
+    if (c < startSec || c > endSec) return { ok: false, error: 'Cliff must be within [start, end].' };
+    cliffSec = c;
+  }
+  return { ok: true, tokenHash, beneficiaryHash, amountRaw, startSec, endSec, cliffSec };
+}
+
+/** Accepts a Neo3 address (N…) or 0x-prefixed hex scripthash. Returns 0x-form. */
+function normalizeHashOrAddress(s: string): string | null {
+  const t = s.trim();
+  if (/^0x[0-9a-fA-F]{40}$/.test(t)) return t.toLowerCase();
+  if (/^N[A-Za-z0-9]{33}$/.test(t)) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { wallet } = require('@cityofzion/neon-js');
+      return '0x' + wallet.getScriptHashFromAddress(t);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Parse a decimal amount (e.g. "1.5") into raw token units (bigint). */
+function parseAmount(s: string, decimals: number): bigint | null {
+  const t = s.replace(/,/g, '').trim();
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  const [whole, frac = ''] = t.split('.');
+  if (frac.length > decimals) return null; // too many decimals
+  const fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
+  return BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(fracPadded);
+}
+
+/** Convert a `<input type="datetime-local">` value to unix seconds. */
+function parseLocalDatetime(s: string): number | null {
+  if (!s) return null;
+  const ms = new Date(s).getTime();
+  if (!Number.isFinite(ms)) return null;
+  return Math.floor(ms / 1000);
+}
+
+function toLocalDatetime(d: Date): string {
+  // datetime-local wants `YYYY-MM-DDTHH:mm`; not the ISO Z form.
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function addSeconds(d: Date, s: number): Date {
+  return new Date(d.getTime() + s * 1000);
+}
+
+function shortAddr(s: string): string {
+  if (!s) return '';
+  if (s.length <= 14) return s;
+  return s.slice(0, 6) + '…' + s.slice(-4);
 }

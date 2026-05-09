@@ -11,6 +11,7 @@ import io.neow3j.devpack.StorageContext;
 import io.neow3j.devpack.StorageMap;
 import io.neow3j.devpack.annotations.DisplayName;
 import io.neow3j.devpack.annotations.ManifestExtra;
+import io.neow3j.devpack.annotations.OnDeployment;
 import io.neow3j.devpack.annotations.OnNEP17Payment;
 import io.neow3j.devpack.annotations.Permission;
 import io.neow3j.devpack.annotations.Safe;
@@ -21,27 +22,34 @@ import io.neow3j.devpack.events.Event3Args;
 import io.neow3j.devpack.events.Event8Args;
 
 /**
- * VestingVault — a trustless NEP-17 token vesting contract for Neo N3.
+ * VestingVault — a Neo N3 token vesting contract.
  *
- * <p>Immutable: no owner, no upgrade, no destroy. The only state mutations
- * possible are: a NEP-17 transfer to the vault (which creates a Lock via
- * {@link #onPayment}), {@link #claim} called by a beneficiary on their own
- * lock, and {@link #revoke} called by the depositor of a revocable lock.
+ * <p>The vault has exactly one privileged role: the <strong>owner</strong>,
+ * set at deploy time and immutable thereafter. The owner is the only address
+ * that can deposit tokens and create new locks (preventing junk locks under
+ * the vault's address). The vault accepts any NEP-17 token, allowing a single
+ * project to vest team / investor / treasury allocations across multiple
+ * tokens in one place.
  *
- * <p>The public methods are intentionally short — each one reads as a list of
- * named steps. Validation, decoding, persistence and outbound transfer logic
- * live in private helpers below the public surface so the high-level flow can
- * be audited at a glance.
+ * <p>Beyond deposit gating, the contract is otherwise fully trustless:
+ * <ul>
+ *   <li>The owner cannot claim, drain, freeze, or update the vault.</li>
+ *   <li>The owner can {@link #revoke} a lock <em>only</em> if it was created
+ *       with {@code revocable: true}, and the recovered tokens go back to
+ *       the depositor (= owner).</li>
+ *   <li>If the owner key is lost: no new locks can be created, but every
+ *       existing lock's claim/revoke continues to work.</li>
+ *   <li>No update path, no destroy.</li>
+ * </ul>
  *
  * <p>Hardening notes (post-audit, see {@code docs/SECURITY.md}):
  * <ul>
- *   <li>{@code @Permission} narrowed to {@code transfer} only.</li>
+ *   <li>{@code @Permission} narrowed to {@code transfer}.</li>
  *   <li>Re-entrancy guard via {@link Runtime#getInvocationCounter} on every
  *       state-mutating method.</li>
  *   <li>State persisted before any cross-contract call (CEI).</li>
  *   <li>All aborts carry a {@code "VV: …"} message.</li>
  *   <li>Stepped tranches bounded to 64 entries.</li>
- *   <li>Mint-as-deposit ({@code from == null}) rejected.</li>
  * </ul>
  */
 @DisplayName("VestingVault")
@@ -59,6 +67,7 @@ public class VestingVault {
     private static final byte[] PREFIX_BY_DEP        = new byte[]{0x04};
     private static final byte[] PREFIX_BY_TOKEN      = new byte[]{0x05};
     private static final byte[] PREFIX_TOTAL_LOCKED  = new byte[]{0x06};
+    private static final byte[] KEY_OWNER            = new byte[]{0x07};
 
     private static final StorageContext ctx = Storage.getStorageContext();
     private static final StorageMap locksMap       = new StorageMap(ctx, PREFIX_LOCKS);
@@ -76,8 +85,7 @@ public class VestingVault {
     private static final byte SCHED_LINEAR  = 1;
     private static final byte SCHED_STEPPED = 2;
 
-    /** Hard cap on the number of tranches in a stepped schedule. Bounds GAS cost
-     * of every read of a stepped lock (which deserializes the array each call). */
+    /** Hard cap on the number of tranches in a stepped schedule. */
     private static final int MAX_TRANCHES = 64;
 
     // ---- Events ----
@@ -96,10 +104,23 @@ public class VestingVault {
     // =============================================================
 
     /**
-     * NEP-17 push callback. The token transfer is taken to be a deposit into
-     * the vault; {@code data} is decoded as the lock parameters and a new
-     * {@link Lock} is created. Any validation failure aborts the entire
-     * transfer.
+     * One-shot initializer fired by {@code ContractManagement.deploy}. The
+     * {@code data} argument MUST be the {@link Hash160} of the address that
+     * will own this vault — the only address allowed to deposit.
+     */
+    @OnDeployment
+    public static void deploy(Object data, boolean update) {
+        if (update) return;
+        if (data == null) Helper.abort("VV: deploy needs owner hash");
+        Hash160 owner = (Hash160) data;
+        if (!Hash160.isValid(owner) || owner.isZero()) Helper.abort("VV: bad owner hash");
+        Storage.put(ctx, KEY_OWNER, owner.toByteString());
+    }
+
+    /**
+     * NEP-17 push callback. The transferred tokens are taken as a deposit
+     * and {@code data} is decoded as lock parameters. Aborts unless
+     * {@code from} equals the vault's owner.
      *
      * <p>Expected {@code data} shape (Object[9]):
      * {@code [beneficiary, scheduleType, startTime, endTime, cliffTime,
@@ -108,6 +129,10 @@ public class VestingVault {
     @OnNEP17Payment
     public static void onPayment(Hash160 from, int amount, Object data) {
         requireValidPayment(from, amount, data);
+
+        Hash160 owner = getOwner();
+        if (owner == null) Helper.abort("VV: not initialized");
+        if (!from.equals(owner)) Helper.abort("VV: not owner");
 
         Hash160 token = Runtime.getCallingScriptHash();
         if (token == null) Helper.abort("VV: no calling token");
@@ -124,8 +149,6 @@ public class VestingVault {
 
     /**
      * Beneficiary withdraws their currently-vested-but-unclaimed amount.
-     * Reverts if there is nothing to claim or the caller is not the beneficiary.
-     *
      * @return the amount transferred this call
      */
     public static int claim(int lockId) {
@@ -138,7 +161,6 @@ public class VestingVault {
         int claimable = vested - lock.claimedAmount;
         if (claimable <= 0) Helper.abort("VV: nothing to claim");
 
-        // CEI: persist new claimedAmount before the external transfer.
         lock.claimedAmount = vested;
         locksMap.put(lockIdToKey(lockId), stdLib.serialize(lock));
 
@@ -152,6 +174,9 @@ public class VestingVault {
      * Depositor revokes the unvested portion of a revocable lock. The
      * beneficiary keeps the right to claim what already vested at the moment
      * of revocation; the schedule is frozen — no further vesting accrues.
+     *
+     * <p>Since only the owner can deposit, the depositor of every lock is the
+     * vault's owner — so {@code revoke} is effectively owner-only.
      */
     public static void revoke(int lockId) {
         guardReentry();
@@ -164,7 +189,6 @@ public class VestingVault {
         int vested = computeVestedRaw(lock);
         int unvested = lock.totalAmount - vested;
 
-        // CEI: freeze the schedule and update bookkeeping before any transfer.
         lock.totalAmount = vested;
         lock.revoked = true;
         locksMap.put(lockIdToKey(lockId), stdLib.serialize(lock));
@@ -178,6 +202,14 @@ public class VestingVault {
     }
 
     // ---- Read methods ----
+
+    /** The address that may deposit into this vault. Set once at deploy. */
+    @Safe
+    public static Hash160 getOwner() {
+        ByteString v = Storage.get(ctx, KEY_OWNER);
+        if (v == null) return null;
+        return new Hash160(v);
+    }
 
     @Safe
     public static Lock getLock(int lockId) {
@@ -204,17 +236,13 @@ public class VestingVault {
         return vested > lock.claimedAmount ? vested - lock.claimedAmount : 0;
     }
 
+    /** Total amount currently locked of {@code token}. */
     @Safe
     public static int totalLocked(Hash160 token) {
         ByteString v = totalLockedMap.get(token.toByteString());
         return v == null ? 0 : v.toInt();
     }
 
-    /**
-     * Iterator of lockIds where the given address is the beneficiary.
-     * Each emitted {@link ByteString} round-trips to {@code int} via
-     * {@code ByteString.toInt()}.
-     */
     @Safe
     public static Iterator<ByteString> getLocksByBeneficiary(Hash160 beneficiary) {
         return findByPrefix(PREFIX_BY_BEN, beneficiary);
@@ -235,8 +263,6 @@ public class VestingVault {
     // =============================================================
 
     private static void requireValidPayment(Hash160 from, int amount, Object data) {
-        // Reject mint-as-deposit (NEP-17 emits transfer with from == null on mint).
-        // A null depositor would make the lock unrevokable forever.
         if (from == null || !Hash160.isValid(from) || from.isZero()) Helper.abort("VV: bad from");
         if (amount <= 0) Helper.abort("VV: bad amount");
         if (data == null) Helper.abort("VV: no data");
@@ -246,16 +272,9 @@ public class VestingVault {
         if (beneficiary == null || !Hash160.isValid(beneficiary) || beneficiary.isZero()) {
             Helper.abort("VV: bad beneficiary");
         }
-        // Vault as its own beneficiary makes no sense and would let anyone with
-        // contract-call ability drain via claim().
         if (beneficiary.equals(Runtime.getExecutingScriptHash())) Helper.abort("VV: self-beneficiary");
     }
 
-    /**
-     * Decodes the {@code data} payload into a populated {@link Lock} (lockId
-     * still 0 — caller assigns it). All field-level validation happens here;
-     * cross-field schedule validation is in {@link #validateAndNormalizeSchedule}.
-     */
     private static Lock decodeLock(Hash160 from, Hash160 token, int amount, Object[] params) {
         if (params.length != 9) Helper.abort("VV: bad data length");
 
@@ -294,10 +313,6 @@ public class VestingVault {
         return lock;
     }
 
-    /**
-     * Cross-field schedule validation. May normalize the lock in-place
-     * (e.g., clamp endTime for cliff, derive start/end from tranches).
-     */
     private static void validateAndNormalizeSchedule(Lock lock, int amount) {
         int now = Runtime.getTime() / 1000;
 
@@ -342,7 +357,6 @@ public class VestingVault {
         }
         if (sum != amount) Helper.abort("VV: tranche sum mismatch");
 
-        // Derive bounds from first/last tranche timestamps.
         lock.startTime = (int) ((Object[]) arr[0])[0];
         lock.endTime   = (int) ((Object[]) arr[arr.length - 1])[0];
         lock.cliffTime = 0;
@@ -359,7 +373,6 @@ public class VestingVault {
         return next;
     }
 
-    /** Writes the lock body, secondary indexes, and totalLocked for a brand-new lock. */
     private static void persistLock(Lock lock) {
         ByteString lockKey = lockIdToKey(lock.lockId);
         locksMap.put(lockKey, stdLib.serialize(lock));
@@ -373,25 +386,23 @@ public class VestingVault {
     }
 
     private static void increaseTotalLocked(Hash160 token, int delta) {
-        ByteString tlRaw = totalLockedMap.get(token.toByteString());
-        int prev = tlRaw == null ? 0 : tlRaw.toInt();
+        ByteString raw = totalLockedMap.get(token.toByteString());
+        int prev = raw == null ? 0 : raw.toInt();
         totalLockedMap.put(token.toByteString(), prev + delta);
     }
 
     private static void decreaseTotalLocked(Hash160 token, int delta) {
-        ByteString tlRaw = totalLockedMap.get(token.toByteString());
-        int prev = tlRaw == null ? 0 : tlRaw.toInt();
+        ByteString raw = totalLockedMap.get(token.toByteString());
+        int prev = raw == null ? 0 : raw.toInt();
         totalLockedMap.put(token.toByteString(), prev - delta);
     }
 
-    /** Returns the lock or null. */
     private static Lock loadLock(int lockId) {
         ByteString raw = locksMap.get(lockIdToKey(lockId));
         if (raw == null) return null;
         return (Lock) stdLib.deserialize(raw);
     }
 
-    /** Returns the lock; aborts if missing. */
     private static Lock loadLockOrAbort(int lockId) {
         Lock lock = loadLock(lockId);
         if (lock == null) Helper.abort("VV: lock not found");
@@ -407,24 +418,12 @@ public class VestingVault {
     // Helpers — outbound transfer + control flow
     // =============================================================
 
-    /**
-     * Sends {@code amount} of {@code token} from this vault to {@code to}.
-     * Aborts with {@code errMsg} if the token returns false or null. The
-     * vault's permission allows only the {@code "transfer"} method, so a
-     * malicious token cannot trick us into invoking arbitrary code on it.
-     */
     private static void transferOut(Hash160 token, Hash160 to, int amount, String errMsg) {
         Object res = Contract.call(token, "transfer", CallFlags.All,
                 new Object[]{ Runtime.getExecutingScriptHash(), to, amount, new ByteString("") });
         if (res == null || !((boolean) res)) Helper.abort(errMsg);
     }
 
-    /**
-     * Re-entrancy guard. Faults if this contract is already on the call stack
-     * within the current transaction. State-mutating methods call this first
-     * to defend against malicious tokens that re-enter the vault during our
-     * outbound {@code transfer}.
-     */
     private static void guardReentry() {
         if (Runtime.getInvocationCounter() != 1) Helper.abort("VV: re-entry");
     }
@@ -434,8 +433,6 @@ public class VestingVault {
     // =============================================================
 
     private static int computeVested(Lock lock) {
-        // Once revoked, totalAmount has been clamped to the vested-at-revoke value.
-        // The schedule is frozen; nothing further vests.
         if (lock.revoked) return lock.totalAmount;
         return computeVestedRaw(lock);
     }
@@ -459,9 +456,6 @@ public class VestingVault {
         if (lock.cliffTime != 0 && now < lock.cliffTime) return 0;
         if (now >= lock.endTime) return lock.totalAmount;
         if (now < lock.startTime) return 0;
-        // Defense in depth: division-by-zero is unreachable given onPayment
-        // validation (start < end), but bounded subtraction keeps the
-        // invariant locally provable.
         int duration = lock.endTime - lock.startTime;
         if (duration <= 0) return 0;
         return lock.totalAmount * (now - lock.startTime) / duration;
@@ -483,7 +477,6 @@ public class VestingVault {
     // Helpers — keys
     // =============================================================
 
-    /** Encode a lockId as a ByteString (the value of {@code int} in Neo VM). */
     private static ByteString lockIdToKey(int lockId) {
         return new ByteString(lockId);
     }

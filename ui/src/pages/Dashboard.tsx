@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import {
   CATEGORIES,
   CONTRACT,
@@ -25,7 +25,7 @@ import { UpcomingBar, type UpcomingBucket } from '@/components/charts/UpcomingBa
 export function Dashboard() {
   const today = TODAY;
   const { contractHash } = useParams<{ contractHash: string }>();
-  const { data: locks, isLoading } = useAllLocks(contractHash ?? '');
+  const { data: locks, isLoading, error, refetch } = useAllLocks(contractHash ?? '');
   const { data: verification = 'loading' } = useVerification(contractHash ?? '');
   // The hook returns the unified `lib/types.Lock`; structurally identical to
   // the mock `lib/data.Lock` so we cast at the boundary instead of refactoring
@@ -127,11 +127,31 @@ export function Dashboard() {
     return events.slice(0, 5);
   }, [today]);
 
-  const sortedLocks = [...items].sort((a, b) => b.amount - a.amount);
+  // ---- Table search + filter ----
+  const [search, setSearch] = useState('');
+  const [filterCat, setFilterCat] = useState<string>('all');
+  const [filterType, setFilterType] = useState<string>('all');
+
+  const sortedLocks = useMemo(() => [...items].sort((a, b) => b.amount - a.amount), [items]);
+
+  const filteredLocks = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return sortedLocks.filter((l) => {
+      if (q) {
+        const hay = (l.ben + ' ' + l.label).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (filterCat !== 'all' && l.cat !== filterCat) return false;
+      if (filterType !== 'all' && l.type !== filterType) return false;
+      return true;
+    });
+  }, [sortedLocks, search, filterCat, filterType]);
 
   function toggleCat(id: string) {
     setActiveCats((prev) => ({ ...prev, [id]: !prev[id] }));
   }
+
+  // ---- Loading / error / empty states ----
 
   if (isLoading && items.length === 0) {
     return (
@@ -139,8 +159,55 @@ export function Dashboard() {
         <div className="page-header">
           <h1 className="page-title">Vesting Dashboard</h1>
         </div>
-        <div className="card card-pad">
-          <div className="card-subtitle">Loading vault data…</div>
+        <DashboardSkeleton />
+      </div>
+    );
+  }
+
+  if (error && items.length === 0) {
+    return (
+      <div data-screen-label="Dashboard">
+        <div className="page-header">
+          <h1 className="page-title">Vesting Dashboard</h1>
+        </div>
+        <div className="card card-pad" style={{ textAlign: 'center', padding: '40px 24px' }}>
+          <div style={{ fontSize: 14, color: 'var(--danger)', marginBottom: 8 }}>
+            Couldn't load vault data
+          </div>
+          <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginBottom: 16 }}>
+            {error instanceof Error ? error.message : String(error)}
+          </div>
+          <button className="btn btn-secondary" onClick={() => void refetch()}>
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isLoading && items.length === 0) {
+    return (
+      <div data-screen-label="Dashboard">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">Vesting Dashboard</h1>
+            <div className="page-subtitle">
+              <span className="mono">{contractHash?.slice(0, 6)}…{contractHash?.slice(-4)}</span>
+              <span className="sep">·</span>
+              <VerificationBadge status={verification} />
+            </div>
+          </div>
+        </div>
+        <div className="card card-pad" style={{ textAlign: 'center', padding: '60px 24px' }}>
+          <div style={{ fontSize: 16, color: 'var(--text-primary)', fontWeight: 600, marginBottom: 6 }}>
+            This vault has no locks yet.
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 20 }}>
+            The owner can create the first lock from the Manage page.
+          </div>
+          <Link to={`/v/${contractHash}/manage`} className="btn btn-primary">
+            Open Manage
+          </Link>
         </div>
       </div>
     );
@@ -366,12 +433,27 @@ export function Dashboard() {
           <div className="card-title" style={{ marginRight: 'auto' }}>All locks</div>
           <div className="input-search" style={{ maxWidth: 260 }}>
             <IconSearch size={14} />
-            <input className="input" placeholder="Search address or label…" />
+            <input
+              className="input"
+              placeholder="Search address or label…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
           </div>
-          <select className="select"><option>All categories</option></select>
-          <select className="select"><option>All schedules</option></select>
+          <select className="select" value={filterCat} onChange={(e) => setFilterCat(e.target.value)}>
+            <option value="all">All categories</option>
+            {CATEGORIES.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <select className="select" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+            <option value="all">All schedules</option>
+            <option value="cliff">Cliff</option>
+            <option value="linear">Linear</option>
+            <option value="stepped">Stepped</option>
+          </select>
           <span style={{ fontSize: 12, color: 'var(--text-tertiary)', marginLeft: 'auto' }}>
-            Showing <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{sortedLocks.length}</span> of {sortedLocks.length}
+            Showing <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{filteredLocks.length}</span> of {sortedLocks.length}
           </span>
         </div>
         <div style={{ overflowX: 'auto' }}>
@@ -388,7 +470,7 @@ export function Dashboard() {
               </tr>
             </thead>
             <tbody>
-              {sortedLocks.map((l) => {
+              {filteredLocks.map((l) => {
                 const vested = vestedAt(l, today);
                 const pct = (vested / l.amount) * 100;
                 const next = nextUnlockDate(l, today);
@@ -444,6 +526,34 @@ export function Dashboard() {
           </table>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------- Loading skeleton ----------
+
+function DashboardSkeleton() {
+  const bar = (h: number) => (
+    <div
+      style={{
+        height: h,
+        background: 'var(--bg-tertiary)',
+        borderRadius: 6,
+        animation: 'pulse 1.6s ease-in-out infinite',
+      }}
+    />
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className="stat-grid">{bar(96)}{bar(96)}{bar(96)}</div>
+      <div className="card card-pad">{bar(280)}</div>
+      <div className="section-grid">
+        <div className="card card-pad">{bar(180)}</div>
+        <div className="card card-pad">{bar(180)}</div>
+      </div>
+      <style>{`
+        @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.55 } }
+      `}</style>
     </div>
   );
 }

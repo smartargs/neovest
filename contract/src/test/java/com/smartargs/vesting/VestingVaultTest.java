@@ -9,6 +9,9 @@ import io.neow3j.protocol.core.response.NeoInvokeFunction;
 import io.neow3j.protocol.core.stackitem.StackItem;
 import io.neow3j.test.ContractTest;
 import io.neow3j.test.ContractTestExtension;
+import io.neow3j.test.DeployConfig;
+import io.neow3j.test.DeployConfiguration;
+import io.neow3j.test.DeployContext;
 import io.neow3j.transaction.AccountSigner;
 import io.neow3j.types.ContractParameter;
 import io.neow3j.types.Hash160;
@@ -57,12 +60,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li><b>Iterators</b>: per-beneficiary, per-depositor, per-token sets.</li>
  * </ol>
  *
- * <p>The adversarial paths are exercised against two purpose-built test
- * contracts in {@code helpers/}: {@link LyingNep17Token} (returns false
- * from contract-originated transfers, exercises {@code "VV: transfer
- * failed"} and {@code "VV: refund failed"}) and {@link ReentrantNep17Token}
- * (whose transfer callback re-enters {@code vault.claim}, exercising
- * {@code "VV: re-entry"}).
+ * <p>The adversarial paths (lying NEP-17 returns false from transfer,
+ * re-entrant NEP-17 calls back into the vault) are exercised via locks
+ * created with those test tokens — the vault accepts any NEP-17 from the
+ * owner, so we don't need separate vault deployments to reach them.
  *
  * <p>The only abort site without a test is {@code "VV: no calling token"} —
  * it's only reachable if {@code Runtime.getCallingScriptHash()} returns
@@ -80,6 +81,21 @@ public class VestingVaultTest {
     @RegisterExtension
     private static final ContractTestExtension ext = new ContractTestExtension();
 
+    /**
+     * Class-level so {@link #configureVault} (runs at deploy) and
+     * {@link #setUp} (runs at @BeforeAll) reference the same Account.
+     * Owner == depositor — the only address authorized to fund the vault.
+     */
+    private static final Account depositor = Account.create();
+
+    /** Bind the vault to the {@link #depositor} as its owner at deploy time. */
+    @DeployConfig(VestingVault.class)
+    public static DeployConfiguration configureVault(DeployContext ctx) {
+        DeployConfiguration cfg = new DeployConfiguration();
+        cfg.setDeployParam(ContractParameter.hash160(depositor.getScriptHash()));
+        return cfg;
+    }
+
     private static Neow3j neow3j;
     private static SmartContract vault;
     private static SmartContract token;
@@ -87,7 +103,6 @@ public class VestingVaultTest {
     private static SmartContract lyingToken;
     /** Re-entrant NEP-17: when the vault calls transfer, it re-enters vault.claim. */
     private static SmartContract reentrantToken;
-    private static Account depositor;
     private static Account beneficiary;
     /** Third party — not depositor, not beneficiary. Used to test access control. */
     private static Account stranger;
@@ -111,7 +126,7 @@ public class VestingVaultTest {
         reentrantToken = ext.getDeployedContract(ReentrantNep17Token.class);
         vault          = ext.getDeployedContract(VestingVault.class);
 
-        depositor   = Account.create();
+        // depositor is class-level (and is the vault owner).
         beneficiary = Account.create();
         stranger    = Account.create();
 
@@ -524,16 +539,40 @@ public class VestingVaultTest {
     }
 
     /**
-     * Vault's outbound {@code Contract.call(token, "transfer", ...)} returns
-     * false from a "lying" NEP-17 token. The vault must reject the failed
-     * payout so the beneficiary's {@code claimedAmount} update doesn't get
-     * recorded against tokens that never moved.
+     * Vault rejects deposits from any address other than the owner. Here a
+     * stranger holds the vault's accepted token but isn't the owner, so the
+     * deposit aborts with {@code "VV: not owner"}.
+     */
+    @Test
+    void payment_byNonOwner_aborts() throws Throwable {
+        // Mint some test tokens to the stranger (no witness check on mint).
+        Hash256 mintTx = token.invokeFunction("mint",
+                        hash160(stranger.getScriptHash()),
+                        integer(BigInteger.valueOf(1_000_000_00L)))
+                .signers(AccountSigner.calledByEntry(stranger))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(mintTx, neow3j);
+
+        ContractParameter data = lockData(beneficiary.getScriptHash(), 0,
+                futureTime(60), futureTime(60), 0L, null,
+                "team", "stranger lock", false);
+        Hash256 tx = token.invokeFunction("transfer",
+                        hash160(stranger.getScriptHash()),
+                        hash160(vault.getScriptHash()),
+                        integer(BigInteger.valueOf(1_000_000_00L)),
+                        data)
+                .signers(AccountSigner.calledByEntry(stranger))
+                .sign().send().getSendRawTransaction().getHash();
+        assertAborted(tx, "VV: not owner", neow3j);
+    }
+
+    /**
+     * Vault's outbound {@code Contract.call} during {@code claim} hits a
+     * lying NEP-17 token (deposited by the owner). The token returns false;
+     * the vault aborts with {@code "VV: transfer failed"}.
      */
     @Test
     void claim_transferFailed_aborts() throws Throwable {
-        // Mint and deposit the lying token. Inbound from EOA → vault works
-        // normally so we get a valid lock; outbound from vault → beneficiary
-        // is what fails.
         BigInteger amount = BigInteger.valueOf(1_000_000_00L);
         mintLyingTokens(amount);
 
@@ -550,7 +589,7 @@ public class VestingVaultTest {
         Await.waitUntilTransactionIsExecuted(depTx, neow3j);
         int lockId = lockCount().intValue();
 
-        ext.fastForwardOneBlock(120); // past the cliff
+        ext.fastForwardOneBlock(120);
 
         Hash256 claimTx = vault.invokeFunction("claim", integer(lockId))
                 .signers(AccountSigner.calledByEntry(beneficiary))
@@ -559,9 +598,8 @@ public class VestingVaultTest {
     }
 
     /**
-     * Vault's outbound {@code Contract.call} during {@code revoke} hits the
-     * same lying token. The depositor's refund must be rejected with
-     * {@code "VV: refund failed"}.
+     * Same lying token, but during {@code revoke}: the unvested-portion
+     * refund call fails with {@code "VV: refund failed"}.
      */
     @Test
     void revoke_refundFailed_aborts() throws Throwable {
@@ -571,7 +609,7 @@ public class VestingVaultTest {
         long now = chainTimeSec();
         ContractParameter data = lockData(beneficiary.getScriptHash(), 1,
                 now + 1, now + 401, 0L, null,
-                "team", "lying-token linear", true /* revocable */);
+                "team", "lying-token linear", true);
         Hash256 depTx = lyingToken.invokeFunction("transfer",
                         hash160(depositor.getScriptHash()),
                         hash160(vault.getScriptHash()),
@@ -582,7 +620,7 @@ public class VestingVaultTest {
         Await.waitUntilTransactionIsExecuted(depTx, neow3j);
         int lockId = lockCount().intValue();
 
-        ext.fastForwardOneBlock(100); // partially vested — revoke must refund the unvested portion
+        ext.fastForwardOneBlock(100);
 
         Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
                 .signers(AccountSigner.calledByEntry(depositor))
@@ -591,11 +629,9 @@ public class VestingVaultTest {
     }
 
     /**
-     * The re-entry guard ({@code Runtime.getInvocationCounter() != 1}) catches
-     * a nested call into the vault from inside the outbound transfer. We
-     * arm a re-entrant NEP-17 to call back into {@code vault.claim} when the
-     * vault transfers tokens out — the inner claim's guard fires before any
-     * state mutation, faulting the entire transaction.
+     * Re-entrant NEP-17: when the vault calls token.transfer during claim,
+     * the token re-enters vault.claim. The inner call's guard sees invocation
+     * counter > 1 and aborts with {@code "VV: re-entry"}, faulting the tx.
      */
     @Test
     void reentry_aborts() throws Throwable {
@@ -604,7 +640,7 @@ public class VestingVaultTest {
 
         ContractParameter data = lockData(beneficiary.getScriptHash(), 0,
                 futureTime(60), futureTime(60), 0L, null,
-                "team", "reentrant-token cliff", false);
+                "team", "reentrant cliff", false);
         Hash256 depTx = reentrantToken.invokeFunction("transfer",
                         hash160(depositor.getScriptHash()),
                         hash160(vault.getScriptHash()),
@@ -615,17 +651,15 @@ public class VestingVaultTest {
         Await.waitUntilTransactionIsExecuted(depTx, neow3j);
         int lockId = lockCount().intValue();
 
-        ext.fastForwardOneBlock(120); // past the cliff so the inner claim WOULD succeed
+        ext.fastForwardOneBlock(120);
 
-        // Arm the attack: when the vault's claim calls token.transfer(vault,
-        // beneficiary, amount, ""), the token re-enters vault.claim(lockId).
         Hash256 armTx = reentrantToken.invokeFunction("setReentryTarget", integer(lockId))
                 .signers(AccountSigner.calledByEntry(depositor))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(armTx, neow3j);
 
         Hash256 claimTx = vault.invokeFunction("claim", integer(lockId))
-                .signers(AccountSigner.global(beneficiary))   // global so witness propagates into the nested call
+                .signers(AccountSigner.global(beneficiary))
                 .sign().send().getSendRawTransaction().getHash();
         assertAborted(claimTx, "VV: re-entry", neow3j);
     }
@@ -780,6 +814,15 @@ public class VestingVaultTest {
     }
 
     @Test
+    void getOwner_returnsBoundOwner() throws Throwable {
+        // After deploy with the depositor's hash as the deploy data, the
+        // vault's getOwner() should return that exact hash.
+        StackItem result = vault.callInvokeFunction("getOwner")
+                .getInvocationResult().getStack().get(0);
+        assertThat(result.getByteArray()).isEqualTo(depositor.getScriptHash().toLittleEndianArray());
+    }
+
+    @Test
     void totalLocked_unknownToken_isZero() throws Throwable {
         // No deposits ever made for an arbitrary token hash → 0.
         Hash160 randomToken = new Hash160(new byte[]{
@@ -791,8 +834,9 @@ public class VestingVaultTest {
 
     @Test
     void totalLocked_increasesOnDeposit_decreasesOnRevoke() throws Throwable {
-        // totalLocked tracks the sum of lock totalAmounts for a given token
-        // and decreases by the unvested-at-revoke amount when a lock is revoked.
+        // totalLocked(token) tracks the sum of lock totalAmounts for that
+        // specific token, decreasing by the unvested-at-revoke amount when
+        // a lock is revoked.
         BigInteger before = totalLockedForToken();
         long now = chainTimeSec();
         BigInteger amount = BigInteger.valueOf(50_000_000L);
@@ -802,17 +846,12 @@ public class VestingVaultTest {
         assertThat(totalLockedForToken()).isEqualTo(before.add(amount));
 
         ext.fastForwardOneBlock(100); // ~25% vested
-        BigInteger vestedAtRevoke = vestedAmount(lockId);
 
         Hash256 tx = vault.invokeFunction("revoke", integer(lockId))
                 .signers(AccountSigner.calledByEntry(depositor))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(tx, neow3j);
 
-        // After revoke: totalLocked drops by the unvested portion (= total - vested).
-        // The vested-but-unclaimed portion stays in the vault, owed to the beneficiary.
-        // Reading vestedAmount AFTER revoke gives us the frozen (clamped) value
-        // exactly — no block-time slop to deal with.
         BigInteger frozenVested = vestedAmount(lockId);
         assertThat(totalLockedForToken()).isEqualTo(before.add(frozenVested));
     }
@@ -867,8 +906,8 @@ public class VestingVaultTest {
 
     @Test
     void getLocksByBeneficiary_emptyForUnknownAddress() throws Throwable {
-        Account stranger = Account.create();
-        Set<Integer> ids = readLockIds("getLocksByBeneficiary", stranger.getScriptHash());
+        Account unknown = Account.create();
+        Set<Integer> ids = readLockIds("getLocksByBeneficiary", unknown.getScriptHash());
         assertThat(ids).isEmpty();
     }
 

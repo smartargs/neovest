@@ -14,25 +14,33 @@
 import type { ContractInvocationMulti, Arg } from '@cityofzion/neon-dappkit-types';
 import type { NeoLineN3, NeoLineArg, NeoLineSigner } from './neoline-types';
 
-/** Resolve the dAPI client. Polls because the extension injects asynchronously. */
-async function getNeoLine(timeoutMs = 3000): Promise<NeoLineN3> {
-  if (typeof window === 'undefined') throw new Error('NeoLine: no window');
+/**
+ * Resolve the dAPI client. The extension injects {@code window.NEOLineN3}
+ * asynchronously after page load, so we either grab it immediately if it's
+ * already there or wait for the {@code NEOLine.N3.EVENT.READY} event.
+ *
+ * {@code NEOLineN3.Init} is a class constructor (per
+ * https://neoline.io/dapi/N3.html) — call it with {@code new}, then use the
+ * instance's promise-returning methods.
+ */
+function getNeoLine(timeoutMs = 3000): Promise<NeoLineN3> {
+  if (typeof window === 'undefined') return Promise.reject(new Error('NeoLine: no window'));
 
   // Fast path: already injected.
-  if (window.NEOLineN3) return window.NEOLineN3.Init();
+  if (window.NEOLineN3) return Promise.resolve(new window.NEOLineN3.Init());
 
   // Slow path: wait for the READY event with a timeout fallback.
   return new Promise<NeoLineN3>((resolve, reject) => {
     const onReady = () => {
       window.removeEventListener('NEOLine.N3.EVENT.READY', onReady);
       if (!window.NEOLineN3) return reject(new Error('NeoLine extension not detected.'));
-      window.NEOLineN3.Init().then(resolve, reject);
+      resolve(new window.NEOLineN3.Init());
     };
     window.addEventListener('NEOLine.N3.EVENT.READY', onReady);
     setTimeout(() => {
       window.removeEventListener('NEOLine.N3.EVENT.READY', onReady);
       if (window.NEOLineN3) {
-        window.NEOLineN3.Init().then(resolve, reject);
+        resolve(new window.NEOLineN3.Init());
       } else {
         reject(new Error('NeoLine not installed. Get it at https://neoline.io.'));
       }

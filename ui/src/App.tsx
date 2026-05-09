@@ -6,6 +6,7 @@ import { Landing } from './pages/Landing';
 import { Dashboard } from './pages/Dashboard';
 import { Manage } from './pages/Manage';
 import { LockDetail } from './pages/LockDetail';
+import { Deploy } from './pages/Deploy';
 
 type Theme = 'dark' | 'light';
 
@@ -28,6 +29,7 @@ function App() {
     <div className="app">
       <Routes>
         <Route path="/" element={<Shell theme={theme} toggleTheme={toggleTheme}><Landing /></Shell>} />
+        <Route path="/deploy" element={<Shell theme={theme} toggleTheme={toggleTheme}><Deploy /></Shell>} />
         <Route path="/v/:contractHash" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><Dashboard /></VaultShell>} />
         <Route path="/v/:contractHash/manage" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><Manage /></VaultShell>} />
         <Route path="/v/:contractHash/lock/:lockId" element={<VaultShell theme={theme} toggleTheme={toggleTheme}><LockDetail /></VaultShell>} />

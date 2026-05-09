@@ -17,9 +17,10 @@ export function Landing() {
   return (
     <div data-screen-label="Landing">
       <div style={{ maxWidth: 640, margin: '64px auto 0' }}>
-        <h1 className="page-title" style={{ fontSize: 32 }}>Inspect a vesting vault</h1>
+        <h1 className="page-title" style={{ fontSize: 32 }}>Inspect or deploy a vesting vault</h1>
         <p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 14 }}>
-          Paste a NeoVest contract hash to see who got what, vesting on what timeline, claimed how much.
+          Paste a NeoVest contract hash to see who got what, vesting on what timeline, claimed how much
+          — or deploy your own immutable vault straight from the browser.
         </p>
 
         <form onSubmit={open} style={{ display: 'flex', gap: 8, marginTop: 24 }}>
@@ -34,6 +35,31 @@ export function Landing() {
             Open <IconChevronRight size={14} />
           </button>
         </form>
+
+        <div
+          style={{
+            marginTop: 14,
+            padding: '14px 16px',
+            background: 'var(--bg-secondary)',
+            border: '1px solid var(--border-subtle)',
+            borderRadius: 8,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 16,
+          }}
+        >
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
+              Deploy a new vault
+            </div>
+            <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 2 }}>
+              Sign one transaction in your wallet — no toolchain needed. Verifiable bytecode.
+            </div>
+          </div>
+          <Link to="/deploy" className="btn btn-secondary">
+            Deploy <IconChevronRight size={14} />
+          </Link>
+        </div>
 
         <div style={{ marginTop: 40 }}>
           <div

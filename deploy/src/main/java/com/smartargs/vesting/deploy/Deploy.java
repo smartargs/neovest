@@ -50,18 +50,30 @@ public final class Deploy {
             System.err.println("DEPLOYER_WIF is required. Refusing to deploy without a key.");
             System.exit(2);
         }
-        run(rpcUrl, wif);
+        // VAULT_OWNER defaults to the deployer's address — the deployer
+        // owns the vault unless someone explicitly hands ownership to a
+        // separate (multi-sig) wallet via the env var.
+        String ownerAddrOrHash = System.getenv("VAULT_OWNER");
+        run(rpcUrl, wif, ownerAddrOrHash);
     }
 
     /**
      * Compile-product → on-chain deployment, with full receipt: tx hash,
      * application-log state check, deterministic contract-hash derivation.
      * Public so {@link DeployLocal} can call it with neo-express defaults.
+     *
+     * @param ownerAddrOrHash the address (N-prefixed) or scripthash (0x-hex)
+     *                        that will own the vault. {@code null} means
+     *                        "the deployer owns it".
      */
-    public static Hash160 run(String rpcUrl, String wif) throws Throwable {
+    public static Hash160 run(String rpcUrl, String wif, String ownerAddrOrHash) throws Throwable {
         Neow3j neow3j = Neow3j.build(new HttpService(rpcUrl));
         Account deployer = Account.fromWIF(wif);
+        Hash160 owner = ownerAddrOrHash != null && !ownerAddrOrHash.isBlank()
+                ? parseHash160(ownerAddrOrHash)
+                : deployer.getScriptHash();
         System.out.println("Deployer: " + deployer.getAddress());
+        System.out.println("Owner:    " + owner);
         System.out.println("RPC:      " + rpcUrl);
 
         Path nefPath = Paths.get("contract", "build", "neow3j", "VestingVault.nef");
@@ -76,7 +88,7 @@ public final class Deploy {
                 .readValue(Files.readAllBytes(manifestPath), ContractManifest.class);
 
         ContractManagement mgmt = new ContractManagement(neow3j);
-        Transaction tx = mgmt.deploy(nef, manifest)
+        Transaction tx = mgmt.deploy(nef, manifest, io.neow3j.types.ContractParameter.hash160(owner))
                 .signers(AccountSigner.calledByEntry(deployer))
                 .sign();
 
@@ -109,6 +121,14 @@ public final class Deploy {
         System.out.println();
         System.out.println("Point the UI at: /v/" + contractHash);
         return contractHash;
+    }
+
+    /** Accept either {@code N…}-style addresses or {@code 0x…}-style scripthashes. */
+    private static Hash160 parseHash160(String s) {
+        s = s.trim();
+        if (s.startsWith("0x") || s.startsWith("0X")) return new Hash160(s);
+        // Treat anything else as a Neo3 address.
+        return io.neow3j.wallet.Account.fromAddress(s).getScriptHash();
     }
 
     private Deploy() {}

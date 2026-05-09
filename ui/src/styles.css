@@ -1075,6 +1075,272 @@
   }
 }
 
+/* Landing hero v2 — compact, with a polished gradient background. */
+.hero-v2 {
+  position: relative;
+  margin: -32px -32px 24px;
+  padding: 36px 32px 28px;
+  border-bottom: 1px solid var(--border-subtle);
+  background:
+    radial-gradient(ellipse at 18% 0%,  color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%),
+    radial-gradient(ellipse at 82% 30%, color-mix(in srgb, var(--info)   10%, transparent), transparent 60%),
+    linear-gradient(180deg, var(--bg-secondary) 0%, transparent 100%);
+}
+.hero-v2-inner {
+  max-width: 720px;
+  margin: 0 auto;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: color-mix(in srgb, var(--bg-secondary) 80%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+.hero-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.hero-title {
+  font-size: 38px;
+  line-height: 1.05;
+  letter-spacing: -0.025em;
+  font-weight: 600;
+  margin: 4px 0 0;
+}
+.hero-title .grad {
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--info) 60%, var(--accent)));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero-sub {
+  margin: 0;
+  max-width: 560px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.hero-input-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 540px;
+  margin-top: 4px;
+}
+.hero-input-row .input { height: 44px; font-size: 14px; }
+.hero-input-row .btn-lg { height: 44px; }
+.hero-quick-links {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+.hero-link {
+  color: var(--accent);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: opacity 120ms;
+}
+.hero-link:hover { opacity: 0.75; }
+.dot-sep {
+  width: 3px; height: 3px;
+  border-radius: 50%;
+  background: var(--text-quaternary);
+}
+
+/* Landing body container. */
+.landing-body {
+  max-width: 1080px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+/* Vaults panel — top priority on the landing page. */
+.vaults-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 18px 20px;
+}
+.panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.panel-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+.panel-meta {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.panel-footer {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+}
+.vaults-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Empty state for vaults panel. */
+.vaults-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--text-tertiary);
+}
+.vaults-empty-icon {
+  width: 36px;
+  height: 36px;
+  margin: 0 auto 12px;
+  border-radius: 8px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+}
+.vaults-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+.vaults-empty-body {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  max-width: 420px;
+  margin: 0 auto 16px;
+  line-height: 1.5;
+}
+.vaults-empty-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+
+/* Single vault row — clickable card. */
+.vault-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 120ms, transform 120ms;
+}
+.vault-row:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border-subtle));
+  transform: translateY(-1px);
+}
+.vault-row-icon {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  background: var(--bg-tertiary);
+  color: var(--accent);
+  display: grid; place-items: center;
+}
+.vault-row-main { flex: 1; min-width: 0; }
+.vault-row-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+.vault-row-meta {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+.vault-row-badges { display: flex; gap: 4px; }
+.vault-row-forget {
+  width: 22px; height: 22px;
+  border: 0; background: transparent;
+  color: var(--text-tertiary);
+  font-size: 16px; line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.vault-row-forget:hover {
+  color: var(--danger);
+  background: var(--bg-tertiary);
+}
+
+/* Feature strip. */
+.feature-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+.feat {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 120ms;
+}
+.feat:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--border-subtle)); }
+.feat-icon {
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  display: grid; place-items: center;
+  margin-bottom: 2px;
+}
+.feat-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.feat-body {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+@media (max-width: 800px) {
+  .feature-strip { grid-template-columns: repeat(2, 1fr); }
+  .hero-title { font-size: 30px; }
+}
+@media (max-width: 500px) {
+  .feature-strip { grid-template-columns: 1fr; }
+  .hero-title { font-size: 26px; }
+}
+
 /* Responsive overrides — kept outside @layer to ensure they win specificity. */
 @media (max-width: 1000px) {
   .section-grid { grid-template-columns: 1fr; }

@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { addToHistory } from '@/lib/vault-history';
 import {
   CATEGORIES,
   categoryColor,
@@ -23,6 +24,11 @@ export function Dashboard() {
   const today = useMemo(() => new Date(), []);
   const { contractHash } = useParams<{ contractHash: string }>();
   const navigate = useNavigate();
+
+  // Remember this vault locally so it shows up in "Your vaults" on landing.
+  useEffect(() => {
+    if (contractHash) addToHistory(contractHash);
+  }, [contractHash]);
   const { data: locks, isLoading, error, refetch } = useAllLocks(contractHash ?? '');
   const { data: verification = 'loading' } = useVerification(contractHash ?? '');
   // The hook returns the unified `lib/types.Lock`; structurally identical to

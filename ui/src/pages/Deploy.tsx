@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useConnection } from '@/lib/connection';
 import { defaultNetwork, type Network } from '@/lib/rpc';
@@ -39,10 +39,19 @@ export function Deploy() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ txHash: string; contractHash: string } | null>(null);
 
-  // Auto-fill owner with connected wallet address once connected.
+  // Auto-fill owner with the connected wallet address — once. After that the
+  // field is fully user-controlled (clearing it must not re-fill it).
+  const autoFilled = useRef(false);
   useEffect(() => {
-    if (!ownerInput && conn.isConnected && conn.address) {
+    if (autoFilled.current) return;
+    if (ownerInput) {
+      // Already populated (e.g. via `?owner=` query param) — count as filled.
+      autoFilled.current = true;
+      return;
+    }
+    if (conn.isConnected && conn.address) {
       setOwnerInput(conn.address);
+      autoFilled.current = true;
     }
   }, [conn.isConnected, conn.address, ownerInput]);
 

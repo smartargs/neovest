@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { wallet as neonWallet } from '@cityofzion/neon-js';
 import { KNOWN_DEPLOYMENTS } from '@/lib/known-deployments';
 import { useConnection } from '@/lib/connection';
+import { contractExists } from '@/lib/contract';
+import { defaultNetwork } from '@/lib/rpc';
 import { useVaultRoles } from '@/lib/hooks';
 import { getHistory, removeFromHistory, type VaultHistoryEntry } from '@/lib/vault-history';
 
@@ -146,6 +148,8 @@ export function Landing() {
   const navigate = useNavigate();
   const conn = useConnection();
   const [hash, setHash] = useState('');
+  const [verifying, setVerifying] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
   const [history, setHistory] = useState<VaultHistoryEntry[]>(() => getHistory());
 
   // localStorage doesn't fire "storage" for same-tab updates; refresh on mount.
@@ -163,11 +167,27 @@ export function Landing() {
     }
   }, [conn.address]);
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
+    setLookupError(null);
     const h = hash.trim();
     if (!h) return;
-    navigate(`/v/${h}`);
+    if (h.toLowerCase() === 'demo') {
+      navigate('/v/demo');
+      return;
+    }
+    if (!/^0x[0-9a-fA-F]{40}$/.test(h)) {
+      setLookupError('Not a valid contract hash. Expected 0x + 40 hex characters.');
+      return;
+    }
+    setVerifying(true);
+    const exists = await contractExists(h);
+    setVerifying(false);
+    if (!exists) {
+      setLookupError(`No contract deployed at this hash on ${defaultNetwork()}.`);
+      return;
+    }
+    navigate(`/v/${h.toLowerCase()}`);
   }
 
   function onForget(h: string) {
@@ -187,19 +207,38 @@ export function Landing() {
           dashboard.
         </p>
 
-        <form className="nv-lookup" onSubmit={onSubmit}>
+        <form className="nv-lookup" onSubmit={(e) => void onSubmit(e)}>
           <input
             className="input mono"
             placeholder="0x… vault contract hash"
             value={hash}
-            onChange={(e) => setHash(e.target.value)}
+            onChange={(e) => {
+              setHash(e.target.value);
+              if (lookupError) setLookupError(null);
+            }}
             spellCheck={false}
             autoComplete="off"
+            disabled={verifying}
           />
-          <button className="btn btn-primary btn-lg" type="submit">
-            Open
+          <button className="btn btn-primary btn-lg" type="submit" disabled={verifying}>
+            {verifying ? 'Checking…' : 'Open'}
           </button>
         </form>
+        {lookupError && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: '8px 12px',
+              background: 'var(--danger-muted)',
+              color: 'var(--danger)',
+              borderRadius: 6,
+              fontSize: 12.5,
+              maxWidth: 560,
+            }}
+          >
+            {lookupError}
+          </div>
+        )}
 
         <div className="nv-quicklinks">
           <Link to="/deploy">

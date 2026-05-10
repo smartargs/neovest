@@ -479,6 +479,7 @@ function CreateLockTab({ today }: { today: Date }) {
   const { contractHash } = useParams<{ contractHash: string }>();
   const conn = useConnection();
   const qc = useQueryClient();
+  const isDemo = isDemoVault(contractHash);
   const { data: owner } = useOwner(contractHash ?? '');
 
   // Connected wallet as 0x scripthash, for owner comparison.
@@ -658,7 +659,25 @@ function CreateLockTab({ today }: { today: Date }) {
         </div>
       </div>
 
-      {ownerMismatch && (
+      {isDemo && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: '10px 14px',
+            background: 'var(--bg-tertiary)',
+            color: 'var(--text-secondary)',
+            border: '1px solid var(--border-default)',
+            borderRadius: 6,
+            fontSize: 12.5,
+          }}
+        >
+          <strong style={{ color: 'var(--text-primary)' }}>Demo vault — read-only.</strong>{' '}
+          The form is shown so you can see the layout, but creating a lock is disabled.
+          Deploy your own vault on the Deploy page to try it for real.
+        </div>
+      )}
+
+      {!isDemo && ownerMismatch && (
         <div
           style={{
             marginBottom: 16,
@@ -880,9 +899,13 @@ function CreateLockTab({ today }: { today: Date }) {
             </div>
             <button
               type="submit"
-              className={'btn btn-primary btn-lg' + ((!parsed.ok || submitting || ownerMismatch) ? ' btn-disabled' : '')}
-              disabled={!parsed.ok || submitting || ownerMismatch}
-              title={ownerMismatch ? 'Connected wallet is not the vault owner.' : undefined}
+              className={'btn btn-primary btn-lg' + ((!parsed.ok || submitting || ownerMismatch || isDemo) ? ' btn-disabled' : '')}
+              disabled={!parsed.ok || submitting || ownerMismatch || isDemo}
+              title={
+                isDemo ? 'Demo vault — locks are read-only.' :
+                ownerMismatch ? 'Connected wallet is not the vault owner.' :
+                undefined
+              }
             >
               <IconLock size={14} /> {submitting ? 'Creating…' : 'Create lock'}
             </button>

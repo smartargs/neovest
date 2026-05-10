@@ -80,32 +80,23 @@ function DualBackendProvider({ children }: { children: ReactNode }) {
   const [neoLineProvider, setNeoLineProvider] = useState<NeoLineProviderShape | null>(null);
 
   // Active backend (or null when not connected).
+  //
+  // NeoLine cannot be silently rehydrated — the dAPI's `getAccount` always
+  // surfaces a permission popup, even for previously-authorized origins.
+  // Auto-reconnecting on mount produced a popup on every page load, and a
+  // user-closed popup left the UI stuck on "Connecting…". So we only
+  // auto-rehydrate WalletConnect (AppKit's session restore is silent); a
+  // remembered NeoLine session still requires the user to click Connect.
   const [activeKind, setActiveKind] = useState<WalletKind | null>(() => {
     if (typeof localStorage === 'undefined') return null;
     const v = localStorage.getItem(STORAGE_KEY);
-    return v === 'neoline' || v === 'walletconnect' ? v : null;
+    return v === 'walletconnect' ? v : null;
   });
 
   const [state, setState] = useState<ConnectionState>(
-    activeKind ? { status: 'connecting' } : { status: 'not_connected' },
+    activeKind === 'walletconnect' ? { status: 'connecting' } : { status: 'not_connected' },
   );
   const first = useRef(true);
-
-  // Reconnect NeoLine on mount if it was the last-used backend.
-  useEffect(() => {
-    void (async () => {
-      if (activeKind !== 'neoline') return;
-      try {
-        const p = await buildNeoLineProvider();
-        setNeoLineProvider(p);
-      } catch {
-        setActiveKind(null);
-        localStorage.removeItem(STORAGE_KEY);
-      }
-    })();
-    // intentionally only on mount
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Drop session on NeoLine account/network change.
   useEffect(() => {
@@ -210,32 +201,11 @@ function DualBackendProvider({ children }: { children: ReactNode }) {
 
 /** Used when WalletConnect isn't configured — only NeoLine is available. */
 function NeoLineOnlyProvider({ children }: { children: ReactNode }) {
+  // NeoLine has no silent-rehydrate path (see DualBackendProvider), so we
+  // never auto-reconnect on mount. The user clicks Connect each session.
   const [neoLineProvider, setNeoLineProvider] = useState<NeoLineProviderShape | null>(null);
-  const [active, setActive] = useState<boolean>(() => {
-    if (typeof localStorage === 'undefined') return false;
-    return localStorage.getItem(STORAGE_KEY) === 'neoline';
-  });
-  const [state, setState] = useState<ConnectionState>(
-    active ? { status: 'connecting' } : { status: 'not_connected' },
-  );
-
-  // Reconnect on mount.
-  useEffect(() => {
-    void (async () => {
-      if (!active) return;
-      try {
-        const p = await buildNeoLineProvider();
-        setNeoLineProvider(p);
-        setState({ status: 'connected', kind: 'neoline', address: p.address, network: p.network });
-      } catch {
-        setActive(false);
-        setState({ status: 'not_connected' });
-        localStorage.removeItem(STORAGE_KEY);
-      }
-    })();
-    // mount only
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const [active, setActive] = useState<boolean>(false);
+  const [state, setState] = useState<ConnectionState>({ status: 'not_connected' });
 
   // Listen for NeoLine events.
   useEffect(() => {

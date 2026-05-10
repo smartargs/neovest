@@ -112,6 +112,21 @@ export async function getOwner(contractHash: string, network?: Network): Promise
 }
 
 /**
+ * Whether a contract is deployed at this hash on the given network.
+ * Returns false on any RPC error so callers can render a single
+ * "not found / unreachable" message without inspecting the failure.
+ */
+export async function contractExists(contractHash: string, network?: Network): Promise<boolean> {
+  const client = getRpcClient(network);
+  try {
+    const state = await client.getContractState(stripHex(contractHash));
+    return !!state;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetch the deployed contract's state (NEF + manifest) via RPC. Used to
  * verify the deployed bytecode's checksum against the expected one bundled
  * with the UI build.

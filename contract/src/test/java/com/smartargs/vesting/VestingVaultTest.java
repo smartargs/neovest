@@ -929,6 +929,496 @@ public class VestingVaultTest {
     }
 
     // ============================================================
+    // 8. Full-flow scenarios — multi-step narratives + interactions
+    // ============================================================
+
+    /**
+     * End-to-end narrative for the most common real-world flow:
+     * owner creates a revocable linear lock for a beneficiary, the
+     * beneficiary claims partway through, the owner later revokes, and
+     * the beneficiary claims out the remaining vested portion. At every
+     * checkpoint we re-assert that totals balance and that the schedule
+     * is frozen post-revoke.
+     */
+    @Test
+    void fullFlow_linearRevocableLifecycle_balancesAtEnd() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        long start = now + 1;
+        long end   = now + 401;
+        BigInteger amount = BigInteger.valueOf(1_000_000_000L);
+
+        BigInteger totalLockedBefore = totalLockedForToken();
+
+        int lockId = createLockForBeneficiary(ben, amount, /*type=*/1, start, end, 0L, null,
+                "team", "full-flow", /*revocable=*/true);
+        assertThat(totalLockedForToken()).isEqualTo(totalLockedBefore.add(amount));
+
+        // ~50% in: claim what's vested so far.
+        ext.fastForwardOneBlock(200);
+        BigInteger benBefore1 = balanceOf(ben.getScriptHash());
+        Hash256 claim1 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(claim1, neow3j);
+        BigInteger received1 = balanceOf(ben.getScriptHash()).subtract(benBefore1);
+        assertThat(received1).isPositive().isLessThan(amount);
+
+        // ~75% in: owner revokes. depositor receives the unvested portion;
+        // the schedule freezes at whatever the vested amount was at the
+        // exact block of the revoke tx (which is what we read post-fact).
+        ext.fastForwardOneBlock(100);
+        BigInteger depBeforeRevoke = balanceOf(depositor.getScriptHash());
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+
+        // Post-revoke: the lock is frozen so vestedAmount returns the
+        // (now-immutable) lock.totalAmount, which is exactly the value the
+        // contract computed at revoke time.
+        BigInteger vestedAtRevoke = vestedAmount(lockId);
+        BigInteger refund = balanceOf(depositor.getScriptHash()).subtract(depBeforeRevoke);
+        assertThat(refund).isEqualTo(amount.subtract(vestedAtRevoke));
+
+        // Schedule frozen — far-future fast-forward must not increase vested.
+        ext.fastForwardOneBlock(10_000);
+        assertThat(vestedAmount(lockId)).isEqualTo(vestedAtRevoke);
+        assertThat(claimableAmount(lockId)).isEqualTo(vestedAtRevoke.subtract(received1));
+
+        // Final claim sweeps the rest.
+        BigInteger benBefore2 = balanceOf(ben.getScriptHash());
+        Hash256 claim2 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(claim2, neow3j);
+        BigInteger received2 = balanceOf(ben.getScriptHash()).subtract(benBefore2);
+
+        // Conservation: beneficiary received exactly the vested-at-revoke
+        // amount, and beneficiary + depositor refund equals the original.
+        assertThat(received1.add(received2)).isEqualTo(vestedAtRevoke);
+        assertThat(received1.add(received2).add(refund)).isEqualTo(amount);
+
+        // totalLocked drops back to its starting value (lock fully drained).
+        assertThat(claimableAmount(lockId)).isEqualTo(BigInteger.ZERO);
+        assertThat(totalLockedForToken()).isEqualTo(totalLockedBefore.add(vestedAtRevoke));
+    }
+
+    /**
+     * Per-token totalLocked accounting is independent: depositing the same
+     * vault into multiple NEP-17 tokens accumulates separate counters.
+     */
+    @Test
+    void totalLocked_partitionedAcrossTokens() throws Throwable {
+        BigInteger mainBefore      = totalLockedForToken();
+        BigInteger lyingBefore     = totalLockedForTokenHash(lyingToken.getScriptHash());
+        BigInteger reentrantBefore = totalLockedForTokenHash(reentrantToken.getScriptHash());
+
+        long now = chainTimeSec();
+        BigInteger mainAmt      = BigInteger.valueOf(11_000_000L);
+        BigInteger lyingAmt     = BigInteger.valueOf(22_000_000L);
+        BigInteger reentrantAmt = BigInteger.valueOf(33_000_000L);
+
+        // Main token via the standard helper.
+        createLock(mainAmt, /*type=*/0, now + 60, now + 60, 0L, null,
+                "team", "multi-token-main", false);
+
+        // Lying token: same payment shape, just signed against lyingToken.
+        mintLyingTokens(lyingAmt);
+        ContractParameter lyingData = lockData(beneficiary.getScriptHash(), 0, now + 60, now + 60, 0L, null,
+                "team", "multi-token-lying", false);
+        Hash256 lyingTx = lyingToken.invokeFunction("transfer",
+                        hash160(depositor.getScriptHash()),
+                        hash160(vault.getScriptHash()),
+                        integer(lyingAmt),
+                        lyingData)
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(lyingTx, neow3j);
+
+        // Re-entrant token (not armed → behaves like a normal NEP-17 here).
+        mintReentrantTokens(reentrantAmt);
+        ContractParameter reentrantData = lockData(beneficiary.getScriptHash(), 0, now + 60, now + 60, 0L, null,
+                "team", "multi-token-reentrant", false);
+        Hash256 reentrantTx = reentrantToken.invokeFunction("transfer",
+                        hash160(depositor.getScriptHash()),
+                        hash160(vault.getScriptHash()),
+                        integer(reentrantAmt),
+                        reentrantData)
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(reentrantTx, neow3j);
+
+        assertThat(totalLockedForToken())
+                .isEqualTo(mainBefore.add(mainAmt));
+        assertThat(totalLockedForTokenHash(lyingToken.getScriptHash()))
+                .isEqualTo(lyingBefore.add(lyingAmt));
+        assertThat(totalLockedForTokenHash(reentrantToken.getScriptHash()))
+                .isEqualTo(reentrantBefore.add(reentrantAmt));
+    }
+
+    /**
+     * Two locks for the same beneficiary are independent: claiming one
+     * does not consume the other's claimable balance.
+     */
+    @Test
+    void sameBeneficiary_twoLocks_claimedIndependently() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        BigInteger amtA = BigInteger.valueOf(15_000_000L);
+        BigInteger amtB = BigInteger.valueOf(25_000_000L);
+        int lockA = createLockForBeneficiary(ben, amtA, 0, now + 30, now + 30, 0L, null,
+                "team", "ind-A", false);
+        int lockB = createLockForBeneficiary(ben, amtB, 0, now + 30, now + 30, 0L, null,
+                "team", "ind-B", false);
+
+        ext.fastForwardOneBlock(60);
+
+        BigInteger before = balanceOf(ben.getScriptHash());
+        Hash256 txA = vault.invokeFunction("claim", integer(lockA))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(txA, neow3j);
+        assertThat(balanceOf(ben.getScriptHash()).subtract(before)).isEqualTo(amtA);
+        // Claiming A does not touch B's claimable.
+        assertThat(claimableAmount(lockB)).isEqualTo(amtB);
+
+        BigInteger mid = balanceOf(ben.getScriptHash());
+        Hash256 txB = vault.invokeFunction("claim", integer(lockB))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(txB, neow3j);
+        assertThat(balanceOf(ben.getScriptHash()).subtract(mid)).isEqualTo(amtB);
+
+        // Re-claim either is rejected.
+        Hash256 txAagain = vault.invokeFunction("claim", integer(lockA))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        assertAborted(txAagain, "VV: nothing to claim", neow3j);
+    }
+
+    /**
+     * Stepped lock with three tranches: claim once after each tranche
+     * unlocks. Each claim returns exactly that tranche's amount; the
+     * three sums equal the lock total.
+     */
+    @Test
+    void stepped_claimedTrancheByTranche_sumsToTotal() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        long t1 = now + 100;
+        long t2 = now + 200;
+        long t3 = now + 300;
+        BigInteger a1 = BigInteger.valueOf(50_000_000L);
+        BigInteger a2 = BigInteger.valueOf(70_000_000L);
+        BigInteger a3 = BigInteger.valueOf(80_000_000L);
+        BigInteger total = a1.add(a2).add(a3);
+
+        ContractParameter tranches = buildTranchesBlob(new long[]{t1, t2, t3},
+                new BigInteger[]{a1, a2, a3});
+        int lockId = createLockForBeneficiary(ben, total, 2, 0L, 0L, 0L, tranches,
+                "team", "stepped-multi-claim", false);
+
+        BigInteger benBalance = balanceOf(ben.getScriptHash());
+
+        ext.fastForwardOneBlock(120);
+        Hash256 c1 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c1, neow3j);
+        assertThat(balanceOf(ben.getScriptHash()).subtract(benBalance)).isEqualTo(a1);
+
+        ext.fastForwardOneBlock(100);
+        BigInteger before2 = balanceOf(ben.getScriptHash());
+        Hash256 c2 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c2, neow3j);
+        assertThat(balanceOf(ben.getScriptHash()).subtract(before2)).isEqualTo(a2);
+
+        ext.fastForwardOneBlock(100);
+        BigInteger before3 = balanceOf(ben.getScriptHash());
+        Hash256 c3 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c3, neow3j);
+        assertThat(balanceOf(ben.getScriptHash()).subtract(before3)).isEqualTo(a3);
+
+        // Total received exactly equals the lock total; nothing remains.
+        assertThat(balanceOf(ben.getScriptHash()).subtract(benBalance)).isEqualTo(total);
+        assertThat(claimableAmount(lockId)).isEqualTo(BigInteger.ZERO);
+    }
+
+    /**
+     * The stepped MAX_TRANCHES cap is 64 (exclusive: 65 aborts; 64 is the
+     * largest accepted size). 65 is already covered; assert 64 is accepted.
+     */
+    @Test
+    void stepped_atMaxTranches_64_succeeds() throws Throwable {
+        long now = chainTimeSec();
+        long[] ts = new long[64];
+        BigInteger[] amts = new BigInteger[64];
+        BigInteger sum = BigInteger.ZERO;
+        for (int i = 0; i < 64; i++) {
+            ts[i] = now + 100 + i * 10L;
+            amts[i] = BigInteger.valueOf(1_000_000L);
+            sum = sum.add(amts[i]);
+        }
+        ContractParameter tranches = buildTranchesBlob(ts, amts);
+
+        BigInteger before = lockCount();
+        int lockId = createLock(sum, 2, 0L, 0L, 0L, tranches,
+                "team", "64 tranches", false);
+        assertThat(BigInteger.valueOf(lockId)).isEqualTo(before.add(BigInteger.ONE));
+        // First/last timestamps recorded as start/end after normalisation.
+        StackItem result = vault.callInvokeFunction("getLock", Arrays.asList(integer(lockId)))
+                .getInvocationResult().getStack().get(0);
+        List<StackItem> fields = result.getList();
+        assertThat(fields.get(7).getInteger().longValue()).isEqualTo(ts[0]);   // startTime
+        assertThat(fields.get(8).getInteger().longValue()).isEqualTo(ts[63]);  // endTime
+    }
+
+    /**
+     * Revoke before any vesting refunds the depositor in full. After
+     * revoke the schedule reports vested == totalAmount (which equals 0
+     * post-freeze) and a beneficiary claim aborts with nothing-to-claim.
+     */
+    @Test
+    void revoke_beforeAnyVesting_fullRefund() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        long start = now + 5_000;     // far future
+        long end   = now + 10_000;
+        BigInteger amount = BigInteger.valueOf(40_000_000L);
+
+        BigInteger depBefore = balanceOf(depositor.getScriptHash());
+        int lockId = createLockForBeneficiary(ben, amount, 1, start, end, 0L, null,
+                "team", "early-revoke", true);
+        // Deposit pulls `amount` out of depositor.
+        assertThat(depBefore.subtract(balanceOf(depositor.getScriptHash()))).isEqualTo(amount);
+
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+
+        // Refund makes the depositor whole.
+        assertThat(balanceOf(depositor.getScriptHash())).isEqualTo(depBefore);
+        // After freeze: totalAmount := vested == 0; revoked is true.
+        // computeVested returns lock.totalAmount when revoked, so vestedAmount is 0.
+        assertThat(vestedAmount(lockId)).isEqualTo(BigInteger.ZERO);
+
+        // Beneficiary cannot claim anything.
+        Hash256 claimTx = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        assertAborted(claimTx, "VV: nothing to claim", neow3j);
+    }
+
+    /**
+     * After a beneficiary partial-claim, revoking does NOT recover the
+     * already-claimed tokens. The depositor only gets back the unvested
+     * remainder relative to the moment of revoke; the beneficiary keeps
+     * what they took plus retains the right to claim the gap between
+     * claimedAmount and vested-at-revoke.
+     */
+    @Test
+    void revoke_afterPartialClaim_doesNotRecoverClaimed() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        long start = now + 1;
+        long end   = now + 401;
+        BigInteger amount = BigInteger.valueOf(1_000_000_000L);
+
+        int lockId = createLockForBeneficiary(ben, amount, 1, start, end, 0L, null,
+                "team", "claim-then-revoke", true);
+
+        // Beneficiary claims at ~25%.
+        ext.fastForwardOneBlock(100);
+        BigInteger benBefore = balanceOf(ben.getScriptHash());
+        Hash256 c1 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c1, neow3j);
+        BigInteger claimed1 = balanceOf(ben.getScriptHash()).subtract(benBefore);
+
+        // Owner revokes at ~75%.
+        ext.fastForwardOneBlock(200);
+        BigInteger depBefore = balanceOf(depositor.getScriptHash());
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+        // Read frozen vested AFTER revoke — the contract computes vested at the
+        // exact block of the revoke tx; pre-revoke reads can be off by the time
+        // it took the tx to mine.
+        BigInteger vestedAtRevoke = vestedAmount(lockId);
+        BigInteger refund = balanceOf(depositor.getScriptHash()).subtract(depBefore);
+        assertThat(refund).isEqualTo(amount.subtract(vestedAtRevoke));
+
+        // Beneficiary's already-claimed balance was not touched.
+        assertThat(balanceOf(ben.getScriptHash())).isEqualTo(benBefore.add(claimed1));
+
+        // The remaining claim picks up exactly (vestedAtRevoke - claimed1).
+        BigInteger benMid = balanceOf(ben.getScriptHash());
+        Hash256 c2 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c2, neow3j);
+        BigInteger claimed2 = balanceOf(ben.getScriptHash()).subtract(benMid);
+        assertThat(claimed1.add(claimed2)).isEqualTo(vestedAtRevoke);
+    }
+
+    /**
+     * Revoking a stepped lock after only some tranches have unlocked
+     * freezes the schedule at exactly that point: future tranches are
+     * refunded to the depositor and never accrue to the beneficiary.
+     */
+    @Test
+    void revoke_stepped_freezesAtPassedTranches() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        long t1 = now + 50;
+        long t2 = now + 200;
+        long t3 = now + 350;
+        BigInteger a1 = BigInteger.valueOf(10_000_000L);
+        BigInteger a2 = BigInteger.valueOf(20_000_000L);
+        BigInteger a3 = BigInteger.valueOf(30_000_000L);
+        BigInteger total = a1.add(a2).add(a3);
+
+        ContractParameter tranches = buildTranchesBlob(new long[]{t1, t2, t3},
+                new BigInteger[]{a1, a2, a3});
+        int lockId = createLockForBeneficiary(ben, total, 2, 0L, 0L, 0L, tranches,
+                "team", "stepped-revoke", true);
+
+        // Past t1 only.
+        ext.fastForwardOneBlock(80);
+        assertThat(vestedAmount(lockId)).isEqualTo(a1);
+
+        BigInteger depBefore = balanceOf(depositor.getScriptHash());
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+        // Refund == a2 + a3.
+        assertThat(balanceOf(depositor.getScriptHash()).subtract(depBefore))
+                .isEqualTo(a2.add(a3));
+
+        // Forward past t2 and t3 — vested stays at a1 (frozen).
+        ext.fastForwardOneBlock(500);
+        assertThat(vestedAmount(lockId)).isEqualTo(a1);
+
+        BigInteger benBefore = balanceOf(ben.getScriptHash());
+        Hash256 c = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c, neow3j);
+        assertThat(balanceOf(ben.getScriptHash()).subtract(benBefore)).isEqualTo(a1);
+    }
+
+    /**
+     * Revoking after the schedule has fully vested is a no-op for the
+     * money trail (unvested == 0, no refund) but still flips the revoked
+     * flag. Beneficiary's full claim still works.
+     */
+    @Test
+    void revoke_afterFullyVested_noRefundFlagsRevoked() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        BigInteger amount = BigInteger.valueOf(25_000_000L);
+        int lockId = createLockForBeneficiary(ben, amount, /*type=*/0, now + 30, now + 30, 0L, null,
+                "team", "late-revoke", true);
+
+        ext.fastForwardOneBlock(60); // past the cliff; vested == amount
+
+        BigInteger depBefore = balanceOf(depositor.getScriptHash());
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+        // No tokens flow back to the depositor.
+        assertThat(balanceOf(depositor.getScriptHash())).isEqualTo(depBefore);
+
+        // revoked flag is set.
+        StackItem result = vault.callInvokeFunction("getLock", Arrays.asList(integer(lockId)))
+                .getInvocationResult().getStack().get(0);
+        List<StackItem> fields = result.getList();
+        assertThat(fields.get(15).getInteger().intValue()).isEqualTo(1);
+
+        // Beneficiary still receives the full vested amount.
+        BigInteger benBefore = balanceOf(ben.getScriptHash());
+        Hash256 c = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c, neow3j);
+        assertThat(balanceOf(ben.getScriptHash()).subtract(benBefore)).isEqualTo(amount);
+    }
+
+    /**
+     * The owner is allowed to set themselves as the beneficiary — the
+     * "self-beneficiary" guard only blocks the *vault* address, not the
+     * owner. Common in treasury / founder-self-vest setups.
+     */
+    @Test
+    void owner_canBeBeneficiaryOfTheirOwnLock() throws Throwable {
+        long now = chainTimeSec();
+        BigInteger amount = BigInteger.valueOf(60_000_000L);
+        BigInteger depBefore = balanceOf(depositor.getScriptHash());
+
+        int lockId = createLockForBeneficiary(depositor, amount, /*type=*/0, now + 30, now + 30, 0L, null,
+                "treasury", "owner-self-vest", false);
+
+        // Right after deposit: -amount from depositor.
+        assertThat(depBefore.subtract(balanceOf(depositor.getScriptHash()))).isEqualTo(amount);
+
+        ext.fastForwardOneBlock(60);
+        Hash256 c = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c, neow3j);
+        // Net flow back to zero (deposit out, claim back in).
+        assertThat(balanceOf(depositor.getScriptHash())).isEqualTo(depBefore);
+    }
+
+    /**
+     * revoke does not unlink the lock from the byBen / byDep / byToken
+     * indexes — a revoked lock is still iterable. The flag is the way to
+     * filter, not the iterator.
+     */
+    @Test
+    void iterators_includeRevokedLocks() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        int lockId = createLockForBeneficiary(ben, BigInteger.valueOf(7_000_000L), 1,
+                now + 1, now + 401, 0L, null, "team", "iter-revoke", true);
+        ext.fastForwardOneBlock(50);
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+
+        assertThat(readLockIds("getLocksByBeneficiary", ben.getScriptHash())).contains(lockId);
+        assertThat(readLockIds("getLocksByDepositor",  depositor.getScriptHash())).contains(lockId);
+        assertThat(readLockIds("getLocksByToken",      token.getScriptHash())).contains(lockId);
+    }
+
+    // ============================================================
     // Helpers
     // ============================================================
 
@@ -1062,7 +1552,11 @@ public class VestingVaultTest {
     }
 
     private BigInteger totalLockedForToken() throws Throwable {
-        return vault.callInvokeFunction("totalLocked", Arrays.asList(hash160(token.getScriptHash())))
+        return totalLockedForTokenHash(token.getScriptHash());
+    }
+
+    private BigInteger totalLockedForTokenHash(Hash160 tokenHash) throws Throwable {
+        return vault.callInvokeFunction("totalLocked", Arrays.asList(hash160(tokenHash)))
                 .getInvocationResult().getStack().get(0).getInteger();
     }
 

@@ -45,21 +45,11 @@ and a public dashboard that lets anyone audit it.
 
 ## How it works
 
-```
-                                                ┌──────────────────┐
-                                                │  Dashboard SPA   │
-                                                │ (read-only view) │
-                                                └────────┬─────────┘
-                                                         │ Neo RPC
-┌──────────────┐    NEP-17 transfer + data    ┌──────────▼─────────┐
-│  Owner       │ ────────────────────────────▶│   VestingVault     │
-│  (wallet)    │                              │   (immutable)      │
-└──────────────┘                              └──────────┬─────────┘
-                                                         │  claim()
-                                              ┌──────────▼─────────┐
-                                              │   Beneficiary      │
-                                              │   (wallet)         │
-                                              └────────────────────┘
+```mermaid
+flowchart LR
+    Owner["Owner<br/>(wallet)"] -- "NEP-17 transfer + lock data" --> Vault["VestingVault<br/>(immutable)"]
+    Dashboard["Dashboard SPA<br/>(read-only)"] -- "Neo RPC" --> Vault
+    Vault -- "claim()" --> Beneficiary["Beneficiary<br/>(wallet)"]
 ```
 
 1. **Deploy** — anyone connects a wallet on the Deploy page and signs one

@@ -19,6 +19,31 @@ npm run build
 
 Outputs `dist/`.
 
+## Test
+
+```bash
+npm run test          # vitest — unit tests of src/lib (RPC mocked); fast, no chain
+npm run e2e:install   # one-time: download the chromium binary
+npm run e2e           # playwright — builds, serves dist/, drives a real browser
+npm run typecheck     # tsc -b + the test/e2e tsconfig
+```
+
+`vitest` (`src/lib/*.test.ts`) covers the chain glue in `lib/contract.ts`
+— stack-item / `Lock` decoding, `contractExists`, `getContractChecksum`,
+`getTokenInfo` — with the RPC layer mocked.
+
+`playwright` (`e2e/`) drives the **built** bundle in a headless browser:
+the landing page boots, the vault-lookup form behaves (it verifies a hash
+is a deployed contract before navigating), and the demo vault (`/v/demo`,
+a canned dataset, zero RPC) renders the dashboard. Its real job is catching
+runtime-only regressions in the polyfill / `manualChunks` config in
+`vite.config.ts` — that config passes `vite build` even when the result is
+a blank page (see the `output.intro` note there for one such trap).
+
+Wallet-gated flows (create lock, claim, revoke, deploy) have no e2e —
+driving a NeoLine / WalletConnect popup is brittle and buys little. The
+contract logic itself is covered by the JUnit suite under `../contract/`.
+
 ## Routes
 
 - `/` — landing page; paste a contract hash

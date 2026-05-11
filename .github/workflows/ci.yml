@@ -40,6 +40,9 @@ jobs:
       - name: Install
         working-directory: ui
         run: npm ci
+      - name: Unit tests
+        working-directory: ui
+        run: npm run test
       # The UI's `prebuild` script bundles the compiled NEF + checksum.
       # Compile the contract first so those scripts have something to copy.
       - uses: actions/setup-java@v4
@@ -51,10 +54,25 @@ jobs:
         run: ./gradlew :contract:neow3jCompile
       - name: Type-check
         working-directory: ui
-        run: npx tsc -b
+        run: npm run typecheck
       - name: Build
         working-directory: ui
         run: npm run build
+      - name: Install Playwright browser
+        working-directory: ui
+        run: npx playwright install --with-deps chromium
+      - name: E2E tests
+        working-directory: ui
+        # webServer in playwright.config.ts runs `vite preview` against the
+        # dist/ built in the previous step.
+        run: npx playwright test
+      - name: Upload Playwright report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: ui/playwright-report/
+          retention-days: 7
       - name: Bundle-size budget
         working-directory: ui
         run: |

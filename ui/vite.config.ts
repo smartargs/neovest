@@ -55,6 +55,16 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
+        // `randomfill` (pulled in via crypto-browserify, the `crypto`
+        // polyfill) has a conditional `exports.randomFill = …` that
+        // @rollup/plugin-commonjs fails to rewrite to its synthetic exports
+        // object — once `vite-plugin-node-polyfills` has injected its shims
+        // into that module, commonjs leaves the assignment referencing a
+        // bare `exports`, and the production chunk crashes at init with
+        // "exports is not defined" (dev is fine — esbuild prebundles it).
+        // Declaring a module-local `exports` in every chunk turns that stray
+        // write into a harmless no-op. (Nothing reads `crypto.randomFill`.)
+        intro: 'var exports = {};',
         // The wallet stack (@reown/appkit + @walletconnect/* + wagmi/viem)
         // and the Neo crypto stack (@cityofzion/*) each weigh more than a
         // megabyte on their own. Without splitting them out, Vite drops

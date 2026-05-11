@@ -7,3 +7,8 @@ dist-ssr
 .vscode
 .idea
 .DS_Store
+
+# Playwright e2e output (reports + traces; the browser cache lives in ~/.cache)
+test-results/
+playwright-report/
+blob-report/

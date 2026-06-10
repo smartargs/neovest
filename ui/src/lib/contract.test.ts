@@ -14,10 +14,12 @@ vi.mock('./rpc', () => ({
   getRpcClient: () => ({ invokeFunction, getContractState }),
 }));
 
+import { u } from '@cityofzion/neon-js';
 import {
   claimableAmount,
   contractExists,
   getContractChecksum,
+  getDeployedNefInfo,
   getLock,
   getLockCount,
   getOwner,
@@ -202,6 +204,42 @@ describe('contractExists / getContractChecksum', () => {
 
     getContractState.mockRejectedValue(new Error('not found'));
     expect(await getContractChecksum(HASH)).toBeNull();
+  });
+});
+
+describe('getDeployedNefInfo', () => {
+  // A tiny "script" of bytes 0x01 0x02 0x03; the RPC returns it base64-encoded.
+  const SCRIPT_BYTES_HEX = '010203';
+  const SCRIPT_B64 = Buffer.from(SCRIPT_BYTES_HEX, 'hex').toString('base64'); // "AQID"
+  const SCRIPT_SHA256 = u.sha256(SCRIPT_BYTES_HEX);
+
+  it('decodes the base64 script and returns its SHA-256 plus the checksum', async () => {
+    getContractState.mockResolvedValue({ nef: { checksum: 3551126892, script: SCRIPT_B64 } });
+    const info = await getDeployedNefInfo(HASH);
+    expect(info).toEqual({ checksum: 3551126892, scriptSha256: SCRIPT_SHA256 });
+  });
+
+  it('coerces a string checksum and still hashes the script', async () => {
+    getContractState.mockResolvedValue({ nef: { checksum: '42', script: SCRIPT_B64 } });
+    expect(await getDeployedNefInfo(HASH)).toEqual({ checksum: 42, scriptSha256: SCRIPT_SHA256 });
+  });
+
+  it('leaves scriptSha256 null when the node omits the script', async () => {
+    getContractState.mockResolvedValue({ nef: { checksum: 7 } });
+    expect(await getDeployedNefInfo(HASH)).toEqual({ checksum: 7, scriptSha256: null });
+  });
+
+  it('treats an empty script string as no script', async () => {
+    getContractState.mockResolvedValue({ nef: { checksum: 7, script: '' } });
+    expect(await getDeployedNefInfo(HASH)).toEqual({ checksum: 7, scriptSha256: null });
+  });
+
+  it('returns null when there is no nef, or on RPC error', async () => {
+    getContractState.mockResolvedValue({ manifest: { name: 'X' } });
+    expect(await getDeployedNefInfo(HASH)).toBeNull();
+
+    getContractState.mockRejectedValue(new Error('not found'));
+    expect(await getDeployedNefInfo(HASH)).toBeNull();
   });
 });
 

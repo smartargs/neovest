@@ -393,6 +393,30 @@ public class VestingVaultTest {
     }
 
     @Test
+    void payment_linearEndInPast_aborts() throws Throwable {
+        // A linear window entirely in the past would be 100% claimable the
+        // instant the lock is created. Rejected even though start < end holds.
+        long now = chainTimeSec();
+        ContractParameter data = lockData(beneficiary.getScriptHash(), 1, now - 200, now - 100, 0L, null,
+                "team", "fully past", false);
+        Hash256 tx = transferToVault(BigInteger.valueOf(1_000_000L), data);
+        assertAborted(tx, "VV: linear in past", neow3j);
+    }
+
+    @Test
+    void payment_linearEndExactlyNow_aborts() throws Throwable {
+        // Boundary: endTime == now is also rejected (must end strictly in the
+        // future). start < end keeps us past the range check first.
+        long now = chainTimeSec();
+        // end is a few seconds back so that, by the block the tx mines in,
+        // endTime <= now holds deterministically rather than racing the clock.
+        ContractParameter data = lockData(beneficiary.getScriptHash(), 1, now - 300, now - 5, 0L, null,
+                "team", "ends ~now", false);
+        Hash256 tx = transferToVault(BigInteger.valueOf(1_000_000L), data);
+        assertAborted(tx, "VV: linear in past", neow3j);
+    }
+
+    @Test
     void payment_unknownScheduleType_aborts() throws Throwable {
         // Schedule type must be 0 (Cliff), 1 (Linear), or 2 (Stepped).
         ContractParameter data = lockData(beneficiary.getScriptHash(), /*type=*/9,
@@ -856,6 +880,70 @@ public class VestingVaultTest {
         assertThat(totalLockedForToken()).isEqualTo(before.add(frozenVested));
     }
 
+    @Test
+    void totalLocked_decreasesByFullAmount_onClaim() throws Throwable {
+        // A cliff lock claimed in full returns totalLocked to its prior value:
+        // the claimed tokens have left the vault and must not be counted as
+        // locked anymore.
+        BigInteger before = totalLockedForToken();
+        long now = chainTimeSec();
+        BigInteger amount = BigInteger.valueOf(70_000_000L);
+
+        int lockId = createLock(amount, /*type=*/0, now + 30, now + 30, 0L, null,
+                "team", "claim-decrements", false);
+        assertThat(totalLockedForToken()).isEqualTo(before.add(amount));
+
+        ext.fastForwardOneBlock(60); // past the cliff; fully vested
+        invokeAsBeneficiary("claim", integer(lockId));
+
+        assertThat(claimableAmount(lockId)).isEqualTo(BigInteger.ZERO);
+        assertThat(totalLockedForToken()).isEqualTo(before);
+    }
+
+    @Test
+    void totalLocked_decreasesIncrementally_acrossPartialClaims() throws Throwable {
+        // Each partial claim decrements totalLocked by exactly the amount paid
+        // out that call, so the running figure always equals (deposited - sum
+        // of everything already claimed).
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        BigInteger before = totalLockedForToken();
+        long now = chainTimeSec();
+        long start = now + 1;
+        long end   = now + 401;
+        BigInteger amount = BigInteger.valueOf(800_000_000L);
+
+        int lockId = createLockForBeneficiary(ben, amount, 1, start, end, 0L, null,
+                "team", "partial-decrement", false);
+        assertThat(totalLockedForToken()).isEqualTo(before.add(amount));
+
+        // First claim ~halfway.
+        ext.fastForwardOneBlock(200);
+        BigInteger benBefore1 = balanceOf(ben.getScriptHash());
+        Hash256 c1 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c1, neow3j);
+        BigInteger claimed1 = balanceOf(ben.getScriptHash()).subtract(benBefore1);
+        assertThat(claimed1).isPositive();
+        // Locked == deposited minus what was just paid out.
+        assertThat(totalLockedForToken()).isEqualTo(before.add(amount).subtract(claimed1));
+
+        // Final claim after the schedule completes drains the rest.
+        ext.fastForwardOneBlock(500);
+        BigInteger benBefore2 = balanceOf(ben.getScriptHash());
+        Hash256 c2 = vault.invokeFunction("claim", integer(lockId))
+                .signers(AccountSigner.calledByEntry(ben))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(c2, neow3j);
+        BigInteger claimed2 = balanceOf(ben.getScriptHash()).subtract(benBefore2);
+        assertThat(claimed1.add(claimed2)).isEqualTo(amount);
+
+        // Fully drained → back to the starting figure.
+        assertThat(totalLockedForToken()).isEqualTo(before);
+    }
+
     // ============================================================
     // 7. Iterators
     // ============================================================
@@ -1001,9 +1089,11 @@ public class VestingVaultTest {
         assertThat(received1.add(received2)).isEqualTo(vestedAtRevoke);
         assertThat(received1.add(received2).add(refund)).isEqualTo(amount);
 
-        // totalLocked drops back to its starting value (lock fully drained).
+        // totalLocked drops back to its starting value: the unvested portion
+        // was decremented at revoke, and every claimed token is decremented as
+        // it leaves the vault — so a fully drained lock contributes nothing.
         assertThat(claimableAmount(lockId)).isEqualTo(BigInteger.ZERO);
-        assertThat(totalLockedForToken()).isEqualTo(totalLockedBefore.add(vestedAtRevoke));
+        assertThat(totalLockedForToken()).isEqualTo(totalLockedBefore);
     }
 
     /**
@@ -1182,6 +1272,39 @@ public class VestingVaultTest {
         List<StackItem> fields = result.getList();
         assertThat(fields.get(7).getInteger().longValue()).isEqualTo(ts[0]);   // startTime
         assertThat(fields.get(8).getInteger().longValue()).isEqualTo(ts[63]);  // endTime
+    }
+
+    /**
+     * Cliff and linear locks never read the tranche blob, so the contract
+     * stores an empty one regardless of what the depositor passed — no
+     * dead storage. Stepped locks keep their blob (they re-deserialize it
+     * on every vested-amount read). Tranches is field index 10 in getLock.
+     */
+    @Test
+    void nonStepped_storesEmptyTranches_steppedKeepsItsBlob() throws Throwable {
+        long now = chainTimeSec();
+
+        // Cliff: pass a junk tranche blob; it must be discarded.
+        ContractParameter junk = buildTranchesBlob(new long[]{now + 100},
+                new BigInteger[]{BigInteger.valueOf(1_000_000L)});
+        int cliffId = createLock(BigInteger.valueOf(5_000_000L), /*type=*/0, now + 60, now + 60, 0L, junk,
+                "team", "cliff-empty-tranches", false);
+        assertThat(trancheBytes(cliffId)).isEmpty();
+
+        // Linear: same — blob cleared.
+        int linearId = createLock(BigInteger.valueOf(6_000_000L), /*type=*/1, now + 10, now + 410, 0L, junk,
+                "team", "linear-empty-tranches", false);
+        assertThat(trancheBytes(linearId)).isEmpty();
+
+        // Stepped: blob retained (non-empty), since vested math depends on it.
+        long t1 = now + 100;
+        long t2 = now + 200;
+        BigInteger a1 = BigInteger.valueOf(3_000_000L);
+        BigInteger a2 = BigInteger.valueOf(4_000_000L);
+        ContractParameter tranches = buildTranchesBlob(new long[]{t1, t2}, new BigInteger[]{a1, a2});
+        int steppedId = createLock(a1.add(a2), /*type=*/2, 0L, 0L, 0L, tranches,
+                "team", "stepped-keeps-tranches", false);
+        assertThat(trancheBytes(steppedId)).isNotEmpty();
     }
 
     /**
@@ -1534,6 +1657,13 @@ public class VestingVaultTest {
             neow3j.terminateSession(sessionId).send();
         }
         return out;
+    }
+
+    /** Read the stored serialized tranche blob (Lock field index 10). */
+    private byte[] trancheBytes(int lockId) throws Throwable {
+        StackItem result = vault.callInvokeFunction("getLock", Arrays.asList(integer(lockId)))
+                .getInvocationResult().getStack().get(0);
+        return result.getList().get(10).getByteArray();
     }
 
     private BigInteger vestedAmount(int lockId) throws Throwable {

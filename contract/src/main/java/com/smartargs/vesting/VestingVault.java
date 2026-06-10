@@ -50,6 +50,15 @@ import io.neow3j.devpack.events.Event8Args;
  *   <li>State persisted before any cross-contract call (CEI).</li>
  *   <li>All aborts carry a {@code "VV: …"} message.</li>
  *   <li>Stepped tranches bounded to 64 entries.</li>
+ *   <li>{@code totalLocked} tracks tokens actually held: it is decreased on
+ *       both {@code claim} (by the amount paid out) and {@code revoke} (by the
+ *       unvested refund), so the figure never overstates the vault's balance.</li>
+ *   <li>Every schedule type must end in the future at creation time — cliff
+ *       ({@code start > now}), stepped (every tranche {@code ts > now}), and
+ *       linear ({@code end > now}) — so no lock can be created already fully
+ *       vested.</li>
+ *   <li>The serialized tranche blob is cleared on cliff/linear locks; it is
+ *       only stored for stepped schedules that actually read it.</li>
  * </ul>
  */
 @DisplayName("VestingVault")
@@ -163,6 +172,7 @@ public class VestingVault {
 
         lock.claimedAmount = vested;
         locksMap.put(lockIdToKey(lockId), stdLib.serialize(lock));
+        decreaseTotalLocked(lock.token, claimable);
 
         transferOut(lock.token, lock.beneficiary, claimable, "VV: transfer failed");
 
@@ -320,13 +330,21 @@ public class VestingVault {
             if (lock.startTime <= now) Helper.abort("VV: cliff in past");
             lock.endTime = lock.startTime;
             lock.cliffTime = 0;
+            lock.tranches = new ByteString("");
             return;
         }
         if (lock.scheduleType == SCHED_LINEAR) {
             if (lock.startTime >= lock.endTime) Helper.abort("VV: bad linear range");
+            // The whole vesting window must not already be in the past — a fully
+            // back-dated linear lock would be 100% claimable the instant it's
+            // created, which is never the intent. This mirrors the future-date
+            // requirement on cliff (startTime > now) and stepped (every tranche
+            // ts > now): for all three schedule types, vesting ends in the future.
+            if (lock.endTime <= now) Helper.abort("VV: linear in past");
             if (lock.cliffTime != 0 && (lock.cliffTime < lock.startTime || lock.cliffTime > lock.endTime)) {
                 Helper.abort("VV: cliff out of range");
             }
+            lock.tranches = new ByteString("");
             return;
         }
         if (lock.scheduleType == SCHED_STEPPED) {

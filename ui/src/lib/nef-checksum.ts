@@ -2,8 +2,19 @@
 // Derived from /home/yannick/workspace/smartargs/neovest/contract/build/neow3j/VestingVault.nef. Re-runs automatically before every `npm run dev` and `npm run build`.
 
 /**
- * Last 4 bytes of `VestingVault.nef` (little-endian uint32). The UI compares
- * this against the deployed contract's NEF checksum (fetched via RPC) to
- * decide the "Verified" badge — see lib/verification.ts.
+ * SHA-256 of the `VestingVault.nef` script bytes — the authoritative
+ * commitment the UI uses to decide the "Verified" badge. The deployed
+ * contract's script (fetched via RPC) is hashed the same way and compared
+ * byte-for-byte equivalent. Empty string means the NEF wasn't compiled at
+ * build time, in which case verification falls back to the checksum. See
+ * lib/verification.ts.
  */
-export const EXPECTED_NEF_CHECKSUM = 3551126892;
+export const EXPECTED_NEF_SCRIPT_SHA256: string = '67baee44446779acd84bd3ecb6d0a543f456426ca9737fbc66713ee8269cf79a';
+
+/**
+ * Last 4 bytes of `VestingVault.nef` (little-endian uint32). Only a 32-bit
+ * value and therefore NOT collision-resistant — used as a fast pre-filter
+ * and as a fallback when an RPC node omits the script from getcontractstate.
+ * Never the sole basis for "Verified".
+ */
+export const EXPECTED_NEF_CHECKSUM = 2626403509;

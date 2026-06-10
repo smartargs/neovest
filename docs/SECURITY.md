@@ -44,6 +44,18 @@ but every existing lock continues to work for its beneficiary.
 - **Block-timestamp granularity.** Schedule math uses `Runtime.getTime()`,
   which is approximate to the second. Schedules that rely on sub-block
   precision are not supported.
+- **One state-mutating vault call per transaction.** The re-entrancy guard
+  rejects any invocation of `claim` or `revoke` where the vault's
+  `Runtime.getInvocationCounter() != 1`. This is intentional and is the
+  mechanism that blocks a malicious token from re-entering the vault during
+  an outbound `transfer` callback. The trade-off is that a single
+  transaction cannot legitimately call the vault more than once: you cannot
+  batch two `claim`s (e.g. for two different locks) into one transaction,
+  and another contract cannot compose a vault `claim`/`revoke` into a larger
+  multi-step script that also re-enters the vault. Each `claim`/`revoke`
+  must be its own top-level transaction. Read methods (`vestedAmount`,
+  `getLock`, the iterators, …) are unaffected — only the two state-mutating
+  entry points are guarded.
 
 ## Audit status
 

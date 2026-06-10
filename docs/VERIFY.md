@@ -56,6 +56,21 @@ deposit into it.
    compiled locally. Any difference means the deployed contract is not this
    source.
 
+## Automated check in the dashboard
+
+The dashboard performs the bytecode half of this comparison for you. On every
+vault view it fetches the deployed contract's NEF via RPC, computes the
+**SHA-256 of the deployed script bytes**, and compares it against the hash of
+the bundled audited NEF (`EXPECTED_NEF_SCRIPT_SHA256`, regenerated from the
+compiled `.nef` at build time). A match drives the green **Verified** badge.
+
+The SHA-256 is collision-resistant, so the badge is a strong commitment that
+the deployed program is byte-for-byte the bundled source. (The NEF's built-in
+4-byte checksum is only used as a fast pre-filter / fallback — it is 32 bits
+and not collision-resistant, so it is never the sole basis for the badge.)
+The badge does not yet compare the manifest, so for high-value vaults still
+run the manual steps above.
+
 ## Why immutability matters
 
 The contract has no `update` method, no admin role, and no upgrade proxy.

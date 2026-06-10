@@ -126,23 +126,63 @@ export async function contractExists(contractHash: string, network?: Network): P
   }
 }
 
+/** Deployed-NEF facts used for source-attested verification. */
+export interface DeployedNefInfo {
+  /** The NEF's built-in 4-byte checksum (32-bit; not collision-resistant). */
+  checksum: number | null;
+  /**
+   * SHA-256 (hex) of the deployed *script* bytes — the actual executable.
+   * Collision-resistant, so equality with the bundled value means the
+   * deployed program is identical to the audited source. `null` if the RPC
+   * node didn't surface the script.
+   */
+  scriptSha256: string | null;
+}
+
 /**
- * Fetch the deployed contract's state (NEF + manifest) via RPC. Used to
- * verify the deployed bytecode's checksum against the expected one bundled
- * with the UI build.
+ * Fetch the deployed contract's NEF facts via RPC in a single call. The
+ * `script` SHA-256 is the authoritative verification axis; the checksum is
+ * a fast pre-filter / fallback. Returns `null` if the contract isn't found
+ * or the RPC errors.
+ *
+ * `getcontractstate` shape:
+ * `{ hash, nef: { magic, compiler, source, tokens, script, checksum }, manifest, ... }`
+ * where `script` is base64.
  */
-export async function getContractChecksum(contractHash: string, network?: Network): Promise<number | null> {
+export async function getDeployedNefInfo(contractHash: string, network?: Network): Promise<DeployedNefInfo | null> {
   const client = getRpcClient(network);
   try {
     const state = await client.getContractState(stripHex(contractHash));
-    // Shape: { hash, nef: { magic, compiler, source, tokens, script, checksum }, manifest, ... }
-    const checksum = (state as { nef?: { checksum?: number | string } }).nef?.checksum;
-    if (checksum == null) return null;
-    return typeof checksum === 'string' ? Number(checksum) : checksum;
+    const nef = (state as { nef?: { checksum?: number | string; script?: string } }).nef;
+    if (nef == null) return null;
+
+    const rawChecksum = nef.checksum;
+    const checksum = rawChecksum == null
+      ? null
+      : (typeof rawChecksum === 'string' ? Number(rawChecksum) : rawChecksum);
+
+    let scriptSha256: string | null = null;
+    if (typeof nef.script === 'string' && nef.script.length > 0) {
+      // RPC returns the script base64-encoded; hash the decoded bytes.
+      const scriptHex = u.HexString.fromBase64(nef.script).toString();
+      scriptSha256 = u.sha256(scriptHex);
+    }
+
+    return { checksum, scriptSha256 };
   } catch {
     // Contract not found or RPC error — treat as unknown rather than throwing.
     return null;
   }
+}
+
+/**
+ * Convenience wrapper returning just the deployed NEF checksum. Retained for
+ * callers that only need the cheap value; prefer {@link getDeployedNefInfo}
+ * when you also need the (authoritative) script hash.
+ */
+export async function getContractChecksum(contractHash: string, network?: Network): Promise<number | null> {
+  const info = await getDeployedNefInfo(contractHash, network);
+  return info == null ? null : info.checksum;
 }
 
 export async function totalLocked(contractHash: string, tokenHash: string, network?: Network): Promise<number> {

@@ -52,6 +52,11 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Compile contract for UI bundling
         run: ./gradlew :contract:neow3jCompile
+      - name: Verify bundled NEF artifact matches the compiled contract
+        run: |
+          cd ui && npm run sync && cd ..
+          git diff --exit-code -- ui/src/lib/nef-artifacts.ts ui/src/lib/nef-checksum.ts \
+            || { echo "::error::Bundled NEF is stale — run 'cd ui && npm run sync' and commit the result."; exit 1; }
       - name: Type-check
         working-directory: ui
         run: npm run typecheck

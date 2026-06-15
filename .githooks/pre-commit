@@ -1,0 +1,16 @@
+#!/bin/sh
+# Enable once per clone:  git config core.hooksPath .githooks
+# Bypass:  git commit --no-verify
+
+staged=$(git diff --cached --name-only)
+
+if echo "$staged" | grep -q '^contract/src/main/'; then
+  if ! echo "$staged" | grep -qE '^ui/src/lib/nef-(artifacts|checksum)\.ts$'; then
+    echo "✗ Contract source changed but the bundled NEF wasn't regenerated."
+    echo "  Run:  ./gradlew :contract:neow3jCompile && (cd ui && npm run sync)"
+    echo "  then stage ui/src/lib/nef-artifacts.ts + nef-checksum.ts."
+    echo "  (Comment-only change that can't affect bytecode? git commit --no-verify)"
+    exit 1
+  fi
+fi
+exit 0

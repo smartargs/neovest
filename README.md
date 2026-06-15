@@ -184,6 +184,16 @@ short version: fork, branch, run the tests, open a PR. Please keep changes
 focused — small, reviewable commits beat sprawling rewrites, especially for
 contract code where every byte matters for reproducible bytecode.
 
+After cloning, enable the repo's git hooks once:
+
+```
+git config core.hooksPath .githooks
+```
+
+The `pre-commit` hook reminds you to regenerate the bundled NEF
+(`cd ui && npm run sync`) whenever you change contract source — CI enforces
+the same check authoritatively.
+
 If you find a security issue, **please don't** open a public issue.
 Instructions for responsible disclosure are in [`docs/SECURITY.md`](docs/SECURITY.md).
 

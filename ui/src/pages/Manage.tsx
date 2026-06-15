@@ -318,8 +318,12 @@ function BeneficiaryLockCard({
           <CategoryPill catId={lock.cat} />
           <span className="sep">·</span>
           <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.dep}</span></span>
-          <span className="sep">·</span>
-          <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+          {lock.label && (
+            <>
+              <span className="sep">·</span>
+              <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+            </>
+          )}
           {lock.revoked && <span className="lock-tag-revoked">Revoked</span>}
         </div>
         <div className="lock-card-amount">
@@ -448,6 +452,8 @@ function DepositorLockCard({
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
   const vested = vestedAt(lock, today);
   const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
+  const { data: chainVested = 0 } = useVested(contractHash ?? '', lock.id);
+  const canRevoke = lock.rev && !lock.revoked && lock.amount - chainVested > 0;
 
   return (
     <div className="lock-card">
@@ -456,8 +462,12 @@ function DepositorLockCard({
           <CategoryPill catId={lock.cat} />
           <span className="sep">·</span>
           <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.ben}</span></span>
-          <span className="sep">·</span>
-          <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+          {lock.label && (
+            <>
+              <span className="sep">·</span>
+              <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+            </>
+          )}
           {lock.revoked && <span className="lock-tag-revoked">Revoked</span>}
         </div>
         <div className="lock-card-amount">
@@ -483,7 +493,7 @@ function DepositorLockCard({
         <Link to={`/v/${contractHash}/lock/${lock.id}`} className="btn btn-secondary">
           View detail →
         </Link>
-        {lock.rev && (
+        {canRevoke && (
           <button
             className={'btn btn-danger btn-sm' + (pendingRevoke ? ' btn-disabled' : '')}
             onClick={() => onRevoke(lock.id)}

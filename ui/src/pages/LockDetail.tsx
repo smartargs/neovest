@@ -41,6 +41,7 @@ export function LockDetail() {
   }
 
   const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
+  const claimedPct = lock.amount > 0 ? ((lock.claimed ?? 0) / lock.amount) * 100 : 0;
 
   return (
     <div>
@@ -51,7 +52,7 @@ export function LockDetail() {
             <IconChevronRight size={12} />
             <span>Lock #{lock.id}</span>
           </div>
-          <h1 className="page-title">{lock.label}</h1>
+          <h1 className="page-title">{lock.label || `Lock #${lock.id}`}</h1>
           <div className="page-subtitle">
             <CategoryPill catId={lock.cat} />
             <span className="sep">·</span>
@@ -108,15 +109,23 @@ export function LockDetail() {
           <div className="card-header">
             <div>
               <div className="card-title">Progress</div>
-              <div className="card-subtitle">Vesting at today's date</div>
+              <div className="card-subtitle">Vested vs claimed, at today's date</div>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span className="mono" style={{ fontSize: 22, color: 'var(--text-primary)' }}>
-              {pct.toFixed(0)}%
-            </span>
-            <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                <span>Vested</span>
+                <span className="mono" style={{ color: 'var(--text-primary)' }}>{pct.toFixed(1)}%</span>
+              </div>
               <ProgressSeg pct={pct} color={categoryColor(lock.cat)} segments={20} />
+            </div>
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                <span>Claimed</span>
+                <span className="mono" style={{ color: 'var(--text-primary)' }}>{claimedPct.toFixed(1)}%</span>
+              </div>
+              <ProgressSeg pct={claimedPct} color="var(--success)" segments={20} />
             </div>
           </div>
         </div>

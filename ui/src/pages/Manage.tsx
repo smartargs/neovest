@@ -306,7 +306,7 @@ function BeneficiaryLockCard({
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
   const { data: vested = 0 } = useVested(contractHash ?? '', lock.id);
   const { data: claimable = 0 } = useClaimable(contractHash ?? '', lock.id);
-  const pct = (vested / lock.amount) * 100;
+  const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
   const isLocked = vested === 0;
   const cliffSoon =
     lock.cliff && lock.cliff > today && lock.cliff.getTime() - today.getTime() < 60 * 24 * 3600 * 1000;
@@ -320,6 +320,7 @@ function BeneficiaryLockCard({
           <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.dep}</span></span>
           <span className="sep">·</span>
           <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+          {lock.revoked && <span className="lock-tag-revoked">Revoked</span>}
         </div>
         <div className="lock-card-amount">
           {fmtTokenAmount(lock.amount, dec)}{sym}
@@ -380,7 +381,7 @@ interface DepositorTabProps extends TabProps {
 function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
   const total = locks.reduce((s, l) => s + l.amount, 0);
   const { decimals: aggDec, symbol: aggSym } = useAggregateTokenMeta(locks);
-  const revoked = 0;
+  const revoked = locks.filter((l) => l.revoked).length;
   const visible = locks.slice(0, 10);
 
   return (
@@ -402,7 +403,7 @@ function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
           <div className="mono" style={{ fontSize: 28, fontWeight: 500, letterSpacing: '-0.01em' }}>
             {fmtTokenAmount(total, aggDec)}{aggSym}
             <span style={{ color: 'var(--text-secondary)', fontSize: 14, marginLeft: 8 }}>
-              across {locks.length} active · {revoked} revoked
+              across {locks.length - revoked} active · {revoked} revoked
             </span>
           </div>
         </div>
@@ -441,7 +442,7 @@ function DepositorLockCard({
   const dec = tokenInfo?.decimals;
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
   const vested = vestedAt(lock, today);
-  const pct = (vested / lock.amount) * 100;
+  const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
 
   return (
     <div className="lock-card">
@@ -452,6 +453,7 @@ function DepositorLockCard({
           <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.ben}</span></span>
           <span className="sep">·</span>
           <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+          {lock.revoked && <span className="lock-tag-revoked">Revoked</span>}
         </div>
         <div className="lock-card-amount">
           {fmtTokenAmount(lock.amount, dec)}{sym}

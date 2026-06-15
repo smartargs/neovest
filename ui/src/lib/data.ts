@@ -34,6 +34,7 @@ export interface Lock {
   cliff?: Date;
   steps?: number;
   rev: boolean;
+  revoked?: boolean;
   claimed?: number;
   token?: string;
 }

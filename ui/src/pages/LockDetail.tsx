@@ -40,7 +40,7 @@ export function LockDetail() {
     );
   }
 
-  const pct = (vested / lock.amount) * 100;
+  const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
 
   return (
     <div>
@@ -90,6 +90,7 @@ export function LockDetail() {
             {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDateTime(lock.cliff)}</dd></>)}
             <dt>Fully vested</dt><dd>{fmtDateTime(lock.end)}</dd>
             <dt>Revocable</dt><dd>{lock.rev ? 'Yes' : 'No'}</dd>
+            {lock.revoked && (<><dt>Status</dt><dd style={{ color: 'var(--danger)' }}>Revoked</dd></>)}
           </dl>
         </div>
 

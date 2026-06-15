@@ -34,7 +34,7 @@ export function MiniCurve({ width = 280, height = 110, lock, today }: MiniCurveP
   }
 
   const xS = (t: number) => padL + ((t - t0) / (t1 - t0)) * innerW;
-  const yS = (v: number) => padT + innerH - (v / lock.amount) * innerH;
+  const yS = (v: number) => padT + innerH - (lock.amount > 0 ? v / lock.amount : 0) * innerH;
 
   let d = '';
   pts.forEach((p, i) => {

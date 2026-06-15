@@ -503,7 +503,7 @@ export function Dashboard() {
             <tbody>
               {filteredLocks.map((l) => {
                 const vested = vestedAt(l, today);
-                const pct = (vested / l.amount) * 100;
+                const pct = l.amount > 0 ? (vested / l.amount) * 100 : 0;
                 const next = nextUnlockDate(l, today);
                 return (
                   <tr

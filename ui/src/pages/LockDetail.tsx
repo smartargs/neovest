@@ -71,7 +71,17 @@ export function LockDetail() {
             </div>
           </div>
           <div className="chart-wrap" style={{ height: 200, background: 'var(--bg-primary)', border: '1px solid var(--border-subtle)', borderRadius: 6 }}>
-            <MiniCurve width={520} height={200} lock={lock} today={today} />
+            {lock.revoked ? (
+              <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, textAlign: 'center', padding: '0 24px' }}>
+                <span className="lock-tag-revoked">Revoked</span>
+                <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 380 }}>
+                  Vesting was stopped and the unvested balance returned to the depositor.
+                  The beneficiary keeps the {fmtTokenAmount(lock.amount, tokenDec)}{tokenSym ? ` ${tokenSym}` : ''} that had vested at that point.
+                </div>
+              </div>
+            ) : (
+              <MiniCurve width={520} height={200} lock={lock} today={today} />
+            )}
           </div>
           <dl className="dl" style={{ marginTop: 16 }}>
             <dt>Token</dt>

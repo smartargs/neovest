@@ -348,6 +348,11 @@ function BeneficiaryLockCard({
           ) : (
             <span>· Not yet vested</span>
           )}
+          {(lock.claimed ?? 0) > 0 && (
+            <span style={{ color: 'var(--text-tertiary)' }}>
+              · Claimed <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
+            </span>
+          )}
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
@@ -467,6 +472,11 @@ function DepositorLockCard({
         <div className="lock-card-progress">
           <ProgressSeg pct={pct} color={categoryColor(lock.cat)} segments={14} />
           <span className="mono" style={{ fontSize: 12, color: 'var(--text-primary)' }}>{pct.toFixed(0)}% vested</span>
+          {(lock.claimed ?? 0) > 0 && (
+            <span style={{ color: 'var(--text-tertiary)' }}>
+              · Claimed <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
+            </span>
+          )}
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>

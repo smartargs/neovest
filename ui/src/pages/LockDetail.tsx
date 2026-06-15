@@ -91,7 +91,7 @@ export function LockDetail() {
             </dd>
             <dt>Total amount</dt><dd>{fmtTokenAmount(lock.amount, tokenDec)}{tokenSym ? ` ${tokenSym}` : ''}</dd>
             <dt>Vested today</dt><dd>{fmtTokenAmount(vested, tokenDec)} ({pct.toFixed(1)}%)</dd>
-            <dt>Claimed</dt><dd>{fmtTokenAmount(lock.claimed ?? 0, tokenDec)}</dd>
+            <dt>Claimed</dt><dd>{fmtTokenAmount(lock.claimed ?? 0, tokenDec)} ({lock.amount > 0 ? (((lock.claimed ?? 0) / lock.amount) * 100).toFixed(1) : '0'}%)</dd>
             <dt>Claimable</dt>
             <dd style={{ color: claimable > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
               {fmtTokenAmount(claimable, tokenDec)}

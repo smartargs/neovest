@@ -3,8 +3,10 @@ package com.smartargs.vesting;
 import com.smartargs.vesting.helpers.LyingNep17Token;
 import com.smartargs.vesting.helpers.ReentrantNep17Token;
 import com.smartargs.vesting.helpers.TestNep17Token;
+import io.neow3j.contract.NeoToken;
 import io.neow3j.contract.SmartContract;
 import io.neow3j.protocol.Neow3j;
+import io.neow3j.protocol.core.response.NeoApplicationLog;
 import io.neow3j.protocol.core.response.NeoInvokeFunction;
 import io.neow3j.protocol.core.stackitem.StackItem;
 import io.neow3j.test.ContractTest;
@@ -16,6 +18,7 @@ import io.neow3j.transaction.AccountSigner;
 import io.neow3j.types.ContractParameter;
 import io.neow3j.types.Hash160;
 import io.neow3j.types.Hash256;
+import io.neow3j.types.NeoVMStateType;
 import io.neow3j.utils.Await;
 import io.neow3j.wallet.Account;
 import org.junit.jupiter.api.BeforeAll;
@@ -30,6 +33,7 @@ import java.util.Set;
 
 import static com.smartargs.vesting.helpers.TestHelper.assertAborted;
 import static com.smartargs.vesting.helpers.TestHelper.fundWithGas;
+import static com.smartargs.vesting.helpers.TestHelper.fundWithNeo;
 import static com.smartargs.vesting.helpers.TestHelper.mintTokens;
 import static io.neow3j.types.ContractParameter.any;
 import static io.neow3j.types.ContractParameter.array;
@@ -1007,12 +1011,14 @@ public class VestingVaultTest {
         Set<Integer> mainIds      = readLockIds("getLocksByToken", token.getScriptHash());
         Set<Integer> lyingIds     = readLockIds("getLocksByToken", lyingToken.getScriptHash());
         Set<Integer> reentrantIds = readLockIds("getLocksByToken", reentrantToken.getScriptHash());
+        Set<Integer> neoIds       = readLockIds("getLocksByToken", new NeoToken(neow3j).getScriptHash());
 
         assertThat(mainIds).doesNotContainAnyElementsOf(lyingIds);
         assertThat(mainIds).doesNotContainAnyElementsOf(reentrantIds);
         assertThat(lyingIds).doesNotContainAnyElementsOf(reentrantIds);
 
-        BigInteger total = BigInteger.valueOf(mainIds.size() + lyingIds.size() + reentrantIds.size());
+        BigInteger total = BigInteger.valueOf(
+                mainIds.size() + lyingIds.size() + reentrantIds.size() + neoIds.size());
         assertThat(total).isEqualTo(lockCount());
     }
 
@@ -1601,6 +1607,59 @@ public class VestingVaultTest {
      * Create a lock for the default {@link #beneficiary}. Asserts that the
      * lockCount went up by exactly 1, returns the new lockId.
      */
+    // ============================================================
+    // Native NEO — GAS auto-distribution callback
+    // ============================================================
+
+    /**
+     * Regression for the "VV: bad from" FAULT on a NEO-funded vault.
+     *
+     * <p>Moving NEO out of the vault makes the NEO contract distribute the
+     * vault's accrued GAS to it, which fires onPayment with a null {@code from}.
+     * onPayment must tolerate that callback; otherwise revoke (and claim) abort.
+     *
+     * <p>The other tests use a mock NEP-17 token, which never distributes GAS,
+     * so this path is only reachable with the real NEO token.
+     */
+    @Test
+    void revoke_neoFundedVault_toleratesGasDistribution() throws Throwable {
+        NeoToken neo = new NeoToken(neow3j);
+        fundWithNeo(neow3j, ext, depositor.getScriptHash(), BigInteger.valueOf(1000));
+
+        ContractParameter data = lockData(beneficiary.getScriptHash(), 1 /*linear*/,
+                futureTime(1000), futureTime(2000), 0L, null, "team", "neo revoke", true);
+
+        BigInteger countBefore = lockCount();
+        Hash256 depositTx = neo.invokeFunction("transfer",
+                        hash160(depositor.getScriptHash()), hash160(vault.getScriptHash()),
+                        integer(BigInteger.valueOf(100)), data)
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(depositTx, neow3j);
+        int lockId = lockCount().intValue();
+        assertThat(lockCount()).isEqualTo(countBefore.add(BigInteger.ONE));
+
+        // Hold NEO across a block so the vault has accrued GAS to be distributed
+        // on the way out — that distribution is what triggers the callback.
+        ext.fastForwardOneBlock(10);
+        BigInteger depNeoAfterDeposit = neo.getBalanceOf(depositor.getScriptHash());
+
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+
+        NeoApplicationLog.Execution exec = neow3j.getApplicationLog(revokeTx).send()
+                .getApplicationLog().getExecutions().get(0);
+        assertThat(exec.getState())
+                .as("revoke on a NEO-funded vault should HALT, not FAULT: %s", exec.getException())
+                .isEqualTo(NeoVMStateType.HALT);
+
+        // Nothing vested yet → the full 100 NEO is refunded to the depositor.
+        assertThat(neo.getBalanceOf(depositor.getScriptHash()))
+                .isEqualTo(depNeoAfterDeposit.add(BigInteger.valueOf(100)));
+    }
+
     private int createLock(BigInteger amount, int scheduleType, long startSec, long endSec, long cliffSec,
                            ContractParameter tranches, String category, String note, boolean revocable)
             throws Throwable {

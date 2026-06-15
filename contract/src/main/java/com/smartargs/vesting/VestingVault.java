@@ -137,6 +137,10 @@ public class VestingVault {
      */
     @OnNEP17Payment
     public static void onPayment(Hash160 from, int amount, Object data) {
+        // GAS accrued from holding NEO is distributed to this contract with a
+        // null `from`; accept it rather than aborting, so NEO can be sent back
+        // out (claim/revoke) without faulting.
+        if (from == null) return;
         requireValidPayment(from, amount, data);
 
         Hash160 owner = getOwner();

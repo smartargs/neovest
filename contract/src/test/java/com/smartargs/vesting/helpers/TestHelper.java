@@ -1,6 +1,7 @@
 package com.smartargs.vesting.helpers;
 
 import io.neow3j.contract.GasToken;
+import io.neow3j.contract.NeoToken;
 import io.neow3j.contract.SmartContract;
 import io.neow3j.protocol.Neow3j;
 import io.neow3j.protocol.core.response.NeoApplicationLog;
@@ -74,6 +75,22 @@ public final class TestHelper {
 
         GasToken gas = new GasToken(neow3j);
         TransactionBuilder b = gas.transfer(multiSig, to, amount)
+                .signers(AccountSigner.calledByEntry(multiSig));
+        Transaction tx = b.getUnsignedTransaction()
+                .addMultiSigWitness(multiSig.getVerificationScript(), signers);
+        Hash256 hash = tx.send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(hash, neow3j);
+    }
+
+    /** Send {@code amount} of native NEO from the genesis multi-sig to {@code to}. */
+    public static void fundWithNeo(Neow3j neow3j, ContractTestExtension ext, Hash160 to, BigInteger amount)
+            throws Throwable {
+        ContractTestExtension.GenesisAccount genesis = ext.getGenesisAccount();
+        Account multiSig = genesis.getMultiSigAccount();
+        Account[] signers = genesis.getSignerAccounts();
+
+        NeoToken neo = new NeoToken(neow3j);
+        TransactionBuilder b = neo.transfer(multiSig, to, amount)
                 .signers(AccountSigner.calledByEntry(multiSig));
         Transaction tx = b.getUnsignedTransaction()
                 .addMultiSigWitness(multiSig.getVerificationScript(), signers);

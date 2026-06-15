@@ -42,7 +42,7 @@ if (existsSync(nefPath)) {
   // script (fetched via RPC) must hash to exactly this.
   const nef = sc.NEF.fromBuffer(buf);
   scriptSha256 = u.sha256(nef.script);
-  note = `Derived from ${nefPath}. Re-runs automatically before every \`npm run dev\` and \`npm run build\`.`;
+  note = 'Derived from contract/build/neow3j/VestingVault.nef. Re-runs automatically before every `npm run dev` and `npm run build`.';
 } else {
   console.warn(`[sync-checksum] ${nefPath} not found (no contract toolchain in this environment?).`);
   if (existsSync(outPath)) {

@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { BrandMark } from './BrandMark';
 import { IconChevronDown, IconSun, IconMoon, IconGitHub } from './icons';
 import { useConnection, type WalletKind } from '@/lib/connection';
@@ -52,6 +52,19 @@ export function Header({ contractHash, theme, toggleTheme }: HeaderProps) {
   );
 }
 
+const MENU_STYLE: CSSProperties = {
+  position: 'absolute',
+  right: 0,
+  top: 'calc(100% + 6px)',
+  minWidth: 240,
+  background: 'var(--bg-elevated)',
+  border: '1px solid var(--border-default)',
+  borderRadius: 8,
+  boxShadow: 'var(--shadow-md)',
+  padding: 6,
+  zIndex: 60,
+};
+
 function WalletControl() {
   const { state, connect, disconnect, walletConnectAvailable } = useConnection();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -84,15 +97,58 @@ function WalletControl() {
     return <button className="btn btn-secondary btn-sm" disabled>Connecting…</button>;
   }
   if (state.status === 'connected') {
+    const walletLabel = state.kind === 'neoline' ? 'NeoLine' : 'WalletConnect';
     return (
-      <button className="wallet-btn" onClick={() => void disconnect()} title="Click to disconnect">
-        <span className="blockie" />
-        <span className="addr">{state.address.slice(0, 6)}…{state.address.slice(-4)}</span>
-        <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 4 }}>
-          {state.kind === 'neoline' ? 'NeoLine' : 'WC'}
-        </span>
-        <IconChevronDown />
-      </button>
+      <div ref={dropdownRef} style={{ position: 'relative' }}>
+        <button
+          className="wallet-btn"
+          onClick={() => setPickerOpen((o) => !o)}
+          title="Account"
+          aria-haspopup="menu"
+          aria-expanded={pickerOpen}
+        >
+          <span className="blockie" />
+          <span className="addr">{state.address.slice(0, 6)}…{state.address.slice(-4)}</span>
+          <span style={{ fontSize: 10, color: 'var(--text-tertiary)', marginLeft: 4 }}>
+            {state.kind === 'neoline' ? 'NeoLine' : 'WC'}
+          </span>
+          <IconChevronDown />
+        </button>
+        {pickerOpen && (
+          <div style={MENU_STYLE} role="menu">
+            <div style={{ padding: '8px 10px' }}>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>Connected · {walletLabel}</div>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  color: 'var(--text-primary)',
+                  wordBreak: 'break-all',
+                  marginTop: 2,
+                }}
+              >
+                {state.address}
+              </div>
+            </div>
+            <div style={{ height: 1, background: 'var(--border-default)', margin: '4px 0' }} />
+            <MenuAction
+              label="Copy address"
+              onClick={() => {
+                void navigator.clipboard?.writeText(state.address);
+                setPickerOpen(false);
+              }}
+            />
+            <MenuAction
+              label="Disconnect"
+              danger
+              onClick={() => {
+                setPickerOpen(false);
+                void disconnect();
+              }}
+            />
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -103,20 +159,7 @@ function WalletControl() {
         Connect <IconChevronDown size={12} />
       </button>
       {pickerOpen && (
-        <div
-          style={{
-            position: 'absolute',
-            right: 0,
-            top: 'calc(100% + 6px)',
-            minWidth: 240,
-            background: 'var(--bg-elevated)',
-            border: '1px solid var(--border-default)',
-            borderRadius: 8,
-            boxShadow: 'var(--shadow-md)',
-            padding: 6,
-            zIndex: 60,
-          }}
-        >
+        <div style={MENU_STYLE}>
           <PickerOption
             label="NeoLine Extension"
             sub={isNeoLineAvailable() ? 'Detected' : 'Install required'}
@@ -149,6 +192,43 @@ function WalletControl() {
         </div>
       )}
     </div>
+  );
+}
+
+function MenuAction({
+  label, onClick, danger,
+}: {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      role="menuitem"
+      onClick={onClick}
+      style={{
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        background: 'transparent',
+        border: 0,
+        padding: '8px 10px',
+        borderRadius: 6,
+        cursor: 'pointer',
+        color: danger ? 'var(--danger)' : 'var(--text-primary)',
+        font: 'inherit',
+        fontSize: 13,
+        fontWeight: 500,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = danger ? 'var(--danger-muted)' : 'var(--bg-tertiary)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = 'transparent';
+      }}
+    >
+      {label}
+    </button>
   );
 }
 

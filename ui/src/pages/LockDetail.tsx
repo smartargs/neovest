@@ -1,6 +1,7 @@
 import { useParams, Link } from 'react-router-dom';
 import { categoryColor, scheduleSummary, type Lock } from '@/lib/data';
 import { useLock, useTokenInfo, useVested, useClaimable, useNow } from '@/lib/hooks';
+import { toNeoAddress } from '@/lib/address';
 import { fmtDateTime, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
@@ -56,9 +57,9 @@ export function LockDetail() {
           <div className="page-subtitle">
             <CategoryPill catId={lock.cat} />
             <span className="sep">·</span>
-            <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.ben}</span></span>
+            <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{toNeoAddress(lock.ben)}</span></span>
             <span className="sep">·</span>
-            <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.dep}</span></span>
+            <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{toNeoAddress(lock.dep)}</span></span>
           </div>
         </div>
       </div>
@@ -75,6 +76,9 @@ export function LockDetail() {
             {lock.revoked ? (
               <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, textAlign: 'center', padding: '0 24px' }}>
                 <span className="lock-tag-revoked">Revoked</span>
+                {lock.revokedAt && (
+                  <div style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{fmtDateTime(lock.revokedAt)}</div>
+                )}
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 380 }}>
                   Vesting was stopped and the unvested balance returned to the depositor.
                   The beneficiary keeps the {fmtTokenAmount(lock.amount, tokenDec)}{tokenSym ? ` ${tokenSym}` : ''} that had vested at that point.
@@ -101,7 +105,7 @@ export function LockDetail() {
             {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDateTime(lock.cliff)}</dd></>)}
             <dt>Fully vested</dt><dd>{fmtDateTime(lock.end)}</dd>
             <dt>Revocable</dt><dd>{lock.rev ? 'Yes' : 'No'}</dd>
-            {lock.revoked && (<><dt>Status</dt><dd style={{ color: 'var(--danger)' }}>Revoked</dd></>)}
+            {lock.revoked && (<><dt>Status</dt><dd style={{ color: 'var(--danger)' }}>Revoked{lock.revokedAt ? ` · ${fmtDateTime(lock.revokedAt)}` : ''}</dd></>)}
           </dl>
         </div>
 

@@ -9,6 +9,7 @@ import {
 import { isDemoVault, DEMO_LOCKS } from '@/lib/demo-data';
 import { addToHistory } from '@/lib/vault-history';
 import { parseLockForm, normalizeHashOrAddress } from '@/lib/lock-form';
+import { toNeoAddress } from '@/lib/address';
 import { fmtDate, fmtDateTime, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
@@ -307,6 +308,7 @@ function BeneficiaryLockCard({
   const { data: vested = 0 } = useVested(contractHash ?? '', lock.id);
   const { data: claimable = 0 } = useClaimable(contractHash ?? '', lock.id);
   const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
+  const claimedPct = lock.amount > 0 ? ((lock.claimed ?? 0) / lock.amount) * 100 : 0;
   const isLocked = vested === 0;
   const cliffSoon =
     lock.cliff && lock.cliff > today && lock.cliff.getTime() - today.getTime() < 60 * 24 * 3600 * 1000;
@@ -317,7 +319,7 @@ function BeneficiaryLockCard({
         <div className="lock-card-head">
           <CategoryPill catId={lock.cat} />
           <span className="sep">·</span>
-          <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.dep}</span></span>
+          <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{toNeoAddress(lock.dep)}</span></span>
           {lock.label && (
             <>
               <span className="sep">·</span>
@@ -352,10 +354,12 @@ function BeneficiaryLockCard({
           ) : (
             <span>· Not yet vested</span>
           )}
+        </div>
+        <div className="lock-card-progress">
+          <ProgressSeg pct={claimedPct} color="var(--success)" segments={14} />
+          <span className="mono" style={{ fontSize: 12, color: 'var(--text-primary)' }}>{claimedPct.toFixed(0)}% claimed</span>
           {(lock.claimed ?? 0) > 0 && (
-            <span style={{ color: 'var(--text-tertiary)' }}>
-              · Claimed <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
-            </span>
+            <span style={{ color: 'var(--text-tertiary)' }}>· {fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
           )}
         </div>
       </div>
@@ -452,6 +456,7 @@ function DepositorLockCard({
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
   const vested = vestedAt(lock, today);
   const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
+  const claimedPct = lock.amount > 0 ? ((lock.claimed ?? 0) / lock.amount) * 100 : 0;
   const { data: chainVested = 0 } = useVested(contractHash ?? '', lock.id);
   const canRevoke = lock.rev && !lock.revoked && lock.amount - chainVested > 0;
 
@@ -461,7 +466,7 @@ function DepositorLockCard({
         <div className="lock-card-head">
           <CategoryPill catId={lock.cat} />
           <span className="sep">·</span>
-          <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.ben}</span></span>
+          <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{toNeoAddress(lock.ben)}</span></span>
           {lock.label && (
             <>
               <span className="sep">·</span>
@@ -482,10 +487,12 @@ function DepositorLockCard({
         <div className="lock-card-progress">
           <ProgressSeg pct={pct} color={categoryColor(lock.cat)} segments={14} />
           <span className="mono" style={{ fontSize: 12, color: 'var(--text-primary)' }}>{pct.toFixed(0)}% vested</span>
+        </div>
+        <div className="lock-card-progress">
+          <ProgressSeg pct={claimedPct} color="var(--success)" segments={14} />
+          <span className="mono" style={{ fontSize: 12, color: 'var(--text-primary)' }}>{claimedPct.toFixed(0)}% claimed</span>
           {(lock.claimed ?? 0) > 0 && (
-            <span style={{ color: 'var(--text-tertiary)' }}>
-              · Claimed <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
-            </span>
+            <span style={{ color: 'var(--text-tertiary)' }}>· {fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
           )}
         </div>
       </div>

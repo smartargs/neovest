@@ -305,6 +305,7 @@ function decodeLockFields(fields: StackItemJson[]): Lock {
   const createdAt     = asNumber(fields[13]);
   const revocable     = asBoolean(fields[14]);
   const revoked       = asBoolean(fields[15]);
+  const revokedAtSec  = fields[16] ? asNumber(fields[16]) : 0;
 
   const type = SCHEDULE_TYPES[scheduleByte] ?? 'cliff';
 
@@ -324,6 +325,7 @@ function decodeLockFields(fields: StackItemJson[]): Lock {
     createdAt: dateFromUnixSec(createdAt),
     revocable,
     revoked,
+    revokedAt: revokedAtSec > 0 ? dateFromUnixSec(revokedAtSec) : undefined,
 
     // Backward-compat aliases (some components still read .cat / .ben / .dep / .rev / .label)
     cat: (category as CategoryId) || 'other',

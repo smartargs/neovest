@@ -45,6 +45,8 @@ export interface Lock {
   revocable: boolean;
   /** True after a successful revoke (schedule frozen). */
   revoked: boolean;
+  /** Block timestamp of revocation; undefined if not revoked. */
+  revokedAt?: Date;
 
   // ---- Display aliases — always populated by adapters; kept for backward
   //      compat with components that already use the short names.

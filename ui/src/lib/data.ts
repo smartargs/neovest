@@ -35,6 +35,7 @@ export interface Lock {
   steps?: number;
   rev: boolean;
   revoked?: boolean;
+  revokedAt?: Date;
   claimed?: number;
   token?: string;
 }

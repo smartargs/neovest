@@ -9,7 +9,7 @@
  * build time, in which case verification falls back to the checksum. See
  * lib/verification.ts.
  */
-export const EXPECTED_NEF_SCRIPT_SHA256: string = '67baee44446779acd84bd3ecb6d0a543f456426ca9737fbc66713ee8269cf79a';
+export const EXPECTED_NEF_SCRIPT_SHA256: string = '767e673920ae072cc3780375026c44a85b415e2fe430ad6c0830c9f11d4e9938';
 
 /**
  * Last 4 bytes of `VestingVault.nef` (little-endian uint32). Only a 32-bit
@@ -17,4 +17,4 @@ export const EXPECTED_NEF_SCRIPT_SHA256: string = '67baee44446779acd84bd3ecb6d0a
  * and as a fallback when an RPC node omits the script from getcontractstate.
  * Never the sole basis for "Verified".
  */
-export const EXPECTED_NEF_CHECKSUM = 2626403509;
+export const EXPECTED_NEF_CHECKSUM = 1476926189;

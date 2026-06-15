@@ -56,7 +56,7 @@ const MENU_STYLE: CSSProperties = {
   position: 'absolute',
   right: 0,
   top: 'calc(100% + 6px)',
-  minWidth: 240,
+  minWidth: 300,
   background: 'var(--bg-elevated)',
   border: '1px solid var(--border-default)',
   borderRadius: 8,
@@ -123,7 +123,7 @@ function WalletControl() {
                   fontSize: 12,
                   fontFamily: "'JetBrains Mono', monospace",
                   color: 'var(--text-primary)',
-                  wordBreak: 'break-all',
+                  whiteSpace: 'nowrap',
                   marginTop: 2,
                 }}
               >

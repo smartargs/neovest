@@ -817,6 +817,7 @@ public class VestingVaultTest {
         // throws on this neow3j version, so compare the int value directly.
         assertThat(fields.get(14).getInteger().intValue()).isEqualTo(1); // revocable
         assertThat(fields.get(15).getInteger().intValue()).isEqualTo(0); // revoked
+        assertThat(fields.get(16).getInteger().intValue()).isEqualTo(0); // revokedAt
     }
 
     @Test
@@ -1458,12 +1459,11 @@ public class VestingVaultTest {
     }
 
     /**
-     * Revoking after the schedule has fully vested is a no-op for the
-     * money trail (unvested == 0, no refund) but still flips the revoked
-     * flag. Beneficiary's full claim still works.
+     * Revoking a fully-vested lock aborts — there is nothing unvested to claw
+     * back. The beneficiary's full claim still works.
      */
     @Test
-    void revoke_afterFullyVested_noRefundFlagsRevoked() throws Throwable {
+    void revoke_afterFullyVested_aborts() throws Throwable {
         Account ben = Account.create();
         fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
 
@@ -1472,21 +1472,12 @@ public class VestingVaultTest {
         int lockId = createLockForBeneficiary(ben, amount, /*type=*/0, now + 30, now + 30, 0L, null,
                 "team", "late-revoke", true);
 
-        ext.fastForwardOneBlock(60); // past the cliff; vested == amount
+        ext.fastForwardOneBlock(60); // past the cliff; fully vested, nothing to revoke
 
-        BigInteger depBefore = balanceOf(depositor.getScriptHash());
         Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
                 .signers(AccountSigner.calledByEntry(depositor))
                 .sign().send().getSendRawTransaction().getHash();
-        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
-        // No tokens flow back to the depositor.
-        assertThat(balanceOf(depositor.getScriptHash())).isEqualTo(depBefore);
-
-        // revoked flag is set.
-        StackItem result = vault.callInvokeFunction("getLock", Arrays.asList(integer(lockId)))
-                .getInvocationResult().getStack().get(0);
-        List<StackItem> fields = result.getList();
-        assertThat(fields.get(15).getInteger().intValue()).isEqualTo(1);
+        assertAborted(revokeTx, "VV: nothing to revoke", neow3j);
 
         // Beneficiary still receives the full vested amount.
         BigInteger benBefore = balanceOf(ben.getScriptHash());
@@ -1495,6 +1486,29 @@ public class VestingVaultTest {
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(c, neow3j);
         assertThat(balanceOf(ben.getScriptHash()).subtract(benBefore)).isEqualTo(amount);
+    }
+
+    /** A successful revoke records the revocation time in revokedAt. */
+    @Test
+    void revoke_recordsRevokedAt() throws Throwable {
+        Account ben = Account.create();
+        fundWithGas(neow3j, ext, ben.getScriptHash(), GAS_FUNDING);
+
+        long now = chainTimeSec();
+        BigInteger amount = BigInteger.valueOf(40_000_000L);
+        int lockId = createLockForBeneficiary(ben, amount, /*type=*/1, now + 1000, now + 2000, 0L, null,
+                "team", "revoked-at", true);
+
+        Hash256 revokeTx = vault.invokeFunction("revoke", integer(lockId))
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        Await.waitUntilTransactionIsExecuted(revokeTx, neow3j);
+
+        StackItem result = vault.callInvokeFunction("getLock", Arrays.asList(integer(lockId)))
+                .getInvocationResult().getStack().get(0);
+        List<StackItem> fields = result.getList();
+        assertThat(fields.get(15).getInteger().intValue()).isEqualTo(1);
+        assertThat(fields.get(16).getInteger().longValue()).isGreaterThanOrEqualTo(now);
     }
 
     /**

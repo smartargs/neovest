@@ -202,15 +202,15 @@ public class VestingVault {
 
         int vested = computeVestedRaw(lock);
         int unvested = lock.totalAmount - vested;
+        if (unvested <= 0) Helper.abort("VV: nothing to revoke");
 
         lock.totalAmount = vested;
         lock.revoked = true;
+        lock.revokedAt = Runtime.getTime() / 1000;
         locksMap.put(lockIdToKey(lockId), stdLib.serialize(lock));
         decreaseTotalLocked(lock.token, unvested);
 
-        if (unvested > 0) {
-            transferOut(lock.token, lock.depositor, unvested, "VV: refund failed");
-        }
+        transferOut(lock.token, lock.depositor, unvested, "VV: refund failed");
 
         onRevoked.fire(lockId, lock.depositor, unvested);
     }
@@ -324,6 +324,7 @@ public class VestingVault {
         lock.createdAt     = Runtime.getTime() / 1000;
         lock.revocable     = revocable;
         lock.revoked       = false;
+        lock.revokedAt     = 0;
         return lock;
     }
 

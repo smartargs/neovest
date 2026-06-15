@@ -31,4 +31,5 @@ public class Lock {
     public int createdAt;
     public boolean revocable;
     public boolean revoked;
+    public int revokedAt;           // unix seconds; 0 until revoked
 }

@@ -1,8 +1,7 @@
-import { useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
-import { useLock, useTokenInfo } from '@/lib/hooks';
-import { fmtDate, fmtTokenAmount } from '@/lib/format';
+import { categoryColor, scheduleSummary, type Lock } from '@/lib/data';
+import { useLock, useTokenInfo, useVested, useClaimable, useNow } from '@/lib/hooks';
+import { fmtDateTime, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
 import { MiniCurve } from '@/components/charts/MiniCurve';
@@ -15,10 +14,12 @@ export function LockDetail() {
   // Cast at the boundary — types.Lock from the hook is structurally
   // identical to the display Lock the components were written against.
   const lock = (rawLock ?? null) as unknown as Lock | null;
-  const today = useMemo(() => new Date(), []);
+  const today = useNow();
   const { data: tokenInfo } = useTokenInfo(lock?.token);
-  const tokenDec = tokenInfo?.decimals ?? 8;
+  const tokenDec = tokenInfo?.decimals;
   const tokenSym = tokenInfo?.symbol;
+  const { data: vested = 0 } = useVested(contractHash ?? '', lockIdNum);
+  const { data: claimable = 0 } = useClaimable(contractHash ?? '', lockIdNum);
 
   if (isLoading && !lock) {
     return (
@@ -39,8 +40,6 @@ export function LockDetail() {
     );
   }
 
-  const vested = vestedAt(lock, today);
-  const claimable = Math.max(0, vested - (lock.claimed ?? 0));
   const pct = (vested / lock.amount) * 100;
 
   return (
@@ -87,9 +86,9 @@ export function LockDetail() {
             <dd style={{ color: claimable > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
               {fmtTokenAmount(claimable, tokenDec)}
             </dd>
-            <dt>Starts</dt><dd>{fmtDate(lock.start)}</dd>
-            {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDate(lock.cliff)}</dd></>)}
-            <dt>Fully vested</dt><dd>{fmtDate(lock.end)}</dd>
+            <dt>Starts</dt><dd>{fmtDateTime(lock.start)}</dd>
+            {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDateTime(lock.cliff)}</dd></>)}
+            <dt>Fully vested</dt><dd>{fmtDateTime(lock.end)}</dd>
             <dt>Revocable</dt><dd>{lock.rev ? 'Yes' : 'No'}</dd>
           </dl>
         </div>

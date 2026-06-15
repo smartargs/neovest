@@ -6,6 +6,7 @@
  * `lib/demo-data.ts` for screenshot purposes — see {@link isDemoVault}.
  */
 
+import { useEffect, useState } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import * as contract from './contract';
 import type { TokenInfo } from './contract';
@@ -61,6 +62,8 @@ export function useVested(contractHash: string, lockId: number | undefined) {
       return contract.vestedAmount(contractHash, lockId);
     },
     enabled: !!contractHash && lockId != null,
+    // Vesting advances with the chain clock — poll so it stays current.
+    refetchInterval: 15_000,
   });
 }
 
@@ -77,7 +80,39 @@ export function useClaimable(contractHash: string, lockId: number | undefined) {
       return contract.claimableAmount(contractHash, lockId);
     },
     enabled: !!contractHash && lockId != null,
+    refetchInterval: 15_000,
   });
+}
+
+// Batch claimable for many locks; shares cache with useClaimable per lockId.
+export function useClaimableForLocks(contractHash: string, lockIds: number[]): Record<number, number | undefined> {
+  const queries = useQueries({
+    queries: lockIds.map((id) => ({
+      queryKey: ['claimable', contractHash, id],
+      queryFn: () => {
+        if (isDemoVault(contractHash)) {
+          const l = DEMO_LOCKS.find((x) => x.id === id);
+          return l ? Math.max(0, vestedAt(l, DEMO_TODAY) - (l.claimed ?? 0)) : 0;
+        }
+        return contract.claimableAmount(contractHash, id);
+      },
+      enabled: !!contractHash,
+      refetchInterval: 15_000,
+    })),
+  });
+  const out: Record<number, number | undefined> = {};
+  lockIds.forEach((id, i) => { out[id] = queries[i].data as number | undefined; });
+  return out;
+}
+
+// Wall-clock that ticks, for cosmetic time-relative displays (countdowns, chart marker).
+export function useNow(intervalMs = 15_000): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
 }
 
 /** The vault owner — the address authorized to deposit / create new locks. */
@@ -154,6 +189,18 @@ export function useTokenInfos(tokenHashes: string[]): Record<string, TokenInfo |
     out[hash] = (queries[i].data as TokenInfo | null | undefined) ?? null;
   });
   return out;
+}
+
+export function useAggregateTokenMeta(locks: { token?: string }[]): {
+  decimals: number | undefined;
+  symbol: string;
+} {
+  const tokens = locks.map((l) => l.token).filter((t): t is string => !!t);
+  const infos = useTokenInfos(tokens);
+  const unique = Array.from(new Set(tokens));
+  if (unique.length !== 1) return { decimals: undefined, symbol: '' };
+  const info = infos[unique[0]];
+  return { decimals: info?.decimals, symbol: info?.symbol ? ` ${info.symbol}` : '' };
 }
 
 export function useLocksByDepositor(contractHash: string, depositor: string | undefined) {

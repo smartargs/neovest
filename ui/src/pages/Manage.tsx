@@ -2,11 +2,14 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
-import { useAllLocks, useOwner, useTokenInfo } from '@/lib/hooks';
+import {
+  useAllLocks, useOwner, useTokenInfo, useAggregateTokenMeta,
+  useVested, useClaimable, useClaimableForLocks, useNow,
+} from '@/lib/hooks';
 import { isDemoVault, DEMO_LOCKS } from '@/lib/demo-data';
 import { addToHistory } from '@/lib/vault-history';
 import { parseLockForm, normalizeHashOrAddress } from '@/lib/lock-form';
-import { fmtDate, fmtRelative, fmtTokenAmount } from '@/lib/format';
+import { fmtDate, fmtDateTime, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
 import { ProgressSeg } from '@/components/ProgressSeg';
 import {
@@ -27,7 +30,7 @@ import { wallet as neonWallet } from '@cityofzion/neon-js';
 type Tab = 'beneficiary' | 'depositor' | 'create';
 
 export function Manage() {
-  const today = useMemo(() => new Date(), []);
+  const today = useNow();
   const { contractHash } = useParams<{ contractHash: string }>();
   const conn = useConnection();
   const qc = useQueryClient();
@@ -223,10 +226,11 @@ interface BeneficiaryTabProps extends TabProps {
 }
 
 function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps) {
-  const totalClaimable = locks.reduce((s, l) => {
-    const v = vestedAt(l, today) - (l.claimed ?? 0);
-    return s + Math.max(0, v);
-  }, 0);
+  const { contractHash } = useParams<{ contractHash: string }>();
+  const claimableByLock = useClaimableForLocks(contractHash ?? '', locks.map((l) => l.id));
+  const totalClaimable = locks.reduce((s, l) => s + (claimableByLock[l.id] ?? 0), 0);
+  const totalLocked = locks.reduce((s, l) => s + l.amount, 0);
+  const { decimals: aggDec, symbol: aggSym } = useAggregateTokenMeta(locks);
 
   return (
     <div>
@@ -246,7 +250,7 @@ function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps)
               Your locked tokens
             </div>
             <div className="mono" style={{ fontSize: 28, fontWeight: 500, letterSpacing: '-0.01em' }}>
-              {fmtTokenAmount(locks.reduce((s, l) => s + l.amount, 0))}
+              {fmtTokenAmount(totalLocked, aggDec)}{aggSym}
               <span style={{ color: 'var(--text-secondary)', fontSize: 14, marginLeft: 8 }}>
                 across {locks.length} locks
               </span>
@@ -254,7 +258,7 @@ function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps)
             <div style={{ marginTop: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
               Claimable now:{' '}
               <span className="mono" style={{ color: 'var(--success)', fontWeight: 600 }}>
-                {fmtTokenAmount(totalClaimable, 8, { compact: true })}
+                {fmtTokenAmount(totalClaimable, aggDec, { compact: true })}{aggSym}
               </span>
             </div>
           </div>
@@ -289,10 +293,10 @@ function BeneficiaryLockCard({
 }) {
   const { contractHash } = useParams<{ contractHash: string }>();
   const { data: tokenInfo } = useTokenInfo(lock.token);
-  const dec = tokenInfo?.decimals ?? 8;
+  const dec = tokenInfo?.decimals;
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
-  const vested = vestedAt(lock, today);
-  const claimable = Math.max(0, vested - (lock.claimed ?? 0));
+  const { data: vested = 0 } = useVested(contractHash ?? '', lock.id);
+  const { data: claimable = 0 } = useClaimable(contractHash ?? '', lock.id);
   const pct = (vested / lock.amount) * 100;
   const isLocked = vested === 0;
   const cliffSoon =
@@ -312,7 +316,7 @@ function BeneficiaryLockCard({
           {fmtTokenAmount(lock.amount, dec)}{sym}
         </div>
         <div className="lock-card-meta">
-          {scheduleSummary(lock)} · {fmtDate(lock.start)} → {fmtDate(lock.end)}
+          {scheduleSummary(lock)} · {fmtDateTime(lock.start)} → {fmtDateTime(lock.end)}
         </div>
         <div className="lock-card-progress">
           <ProgressSeg pct={pct} color={categoryColor(lock.cat)} segments={14} />
@@ -366,6 +370,7 @@ interface DepositorTabProps extends TabProps {
 
 function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
   const total = locks.reduce((s, l) => s + l.amount, 0);
+  const { decimals: aggDec, symbol: aggSym } = useAggregateTokenMeta(locks);
   const revoked = 0;
   const visible = locks.slice(0, 10);
 
@@ -386,7 +391,7 @@ function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
             Locks you created
           </div>
           <div className="mono" style={{ fontSize: 28, fontWeight: 500, letterSpacing: '-0.01em' }}>
-            {fmtTokenAmount(total)}
+            {fmtTokenAmount(total, aggDec)}{aggSym}
             <span style={{ color: 'var(--text-secondary)', fontSize: 14, marginLeft: 8 }}>
               across {locks.length} active · {revoked} revoked
             </span>
@@ -424,7 +429,7 @@ function DepositorLockCard({
 }) {
   const { contractHash } = useParams<{ contractHash: string }>();
   const { data: tokenInfo } = useTokenInfo(lock.token);
-  const dec = tokenInfo?.decimals ?? 8;
+  const dec = tokenInfo?.decimals;
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
   const vested = vestedAt(lock, today);
   const pct = (vested / lock.amount) * 100;
@@ -957,15 +962,15 @@ function CreateLockTab({ today }: { today: Date }) {
                   : (parsed.ok && parsed.cliffSec ? 'Linear with cliff' : 'Linear')}
               </dd>
               <dt>Starts</dt>
-              <dd>{parsed.ok ? fmtDate(new Date(parsed.startSec * 1000)) : '—'}</dd>
+              <dd>{parsed.ok ? fmtDateTime(new Date(parsed.startSec * 1000)) : '—'}</dd>
               {scheduleType === 'linear' && parsed.ok && parsed.cliffSec && (
                 <>
                   <dt>Cliff ends</dt>
-                  <dd>{fmtDate(new Date(parsed.cliffSec * 1000))}</dd>
+                  <dd>{fmtDateTime(new Date(parsed.cliffSec * 1000))}</dd>
                 </>
               )}
               <dt>Fully vested</dt>
-              <dd>{parsed.ok ? fmtDate(new Date(parsed.endSec * 1000)) : '—'}</dd>
+              <dd>{parsed.ok ? fmtDateTime(new Date(parsed.endSec * 1000)) : '—'}</dd>
             </dl>
 
             <div className="divider" />

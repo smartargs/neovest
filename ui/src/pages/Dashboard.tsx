@@ -73,16 +73,14 @@ export function Dashboard() {
   // Per-token metadata (symbol, decimals, totalSupply) for every lock.
   // Each unique token hash spawns one cached RPC trio; lookups are O(1).
   const tokenInfos = useTokenInfos(tokenList);
-  // Decimals helper: token-specific when known, fall back to 8.
-  const decimalsFor = (hash?: string): number => {
-    if (!hash) return 8;
-    return tokenInfos[hash]?.decimals ?? 8;
+  const decimalsFor = (hash?: string): number | undefined => {
+    if (!hash) return undefined;
+    return tokenInfos[hash]?.decimals;
   };
   // Single-token vault → show symbol + % of supply. Multi-token → skip.
   const singleToken = uniqueTokens === 1 ? Array.from(tokenSet)[0] : undefined;
   const { data: tokenInfo } = useTokenInfo(singleToken);
-  // Default decimals for aggregate stats: the vault's single token, or 8.
-  const aggDecimals = tokenInfo?.decimals ?? 8;
+  const aggDecimals = tokenInfo?.decimals;
   const pctOfSupply =
     tokenInfo && tokenInfo.totalSupply > 0
       ? ((totalLocked / tokenInfo.totalSupply) * 100).toFixed(2)

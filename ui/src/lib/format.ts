@@ -22,16 +22,15 @@ export function fmtNum(n: number | null | undefined, opts: FmtNumOpts = {}): str
  * decimal string. e.g. {@code fmtTokenAmount(111100000000, 8)} → `"1,111"`.
  *
  * Trailing zeros in the fractional part are trimmed. Pass {@code compact}
- * for K/M/B abbreviations on the whole part.
- *
- * @param tokenDecimals defaults to 8 (GAS / NEP-17 convention).
+ * for K/M/B abbreviations on the whole part. Returns "—" when tokenDecimals is
+ * null/undefined (token metadata not loaded yet).
  */
 export function fmtTokenAmount(
   raw: number | bigint | null | undefined,
-  tokenDecimals = 8,
+  tokenDecimals: number | null | undefined,
   opts: FmtNumOpts = {},
 ): string {
-  if (raw == null) return '—';
+  if (raw == null || tokenDecimals == null) return '—';
   const r = typeof raw === 'bigint' ? raw : BigInt(Math.trunc(raw));
   const factor = 10n ** BigInt(tokenDecimals);
   const whole = r / factor;
@@ -60,6 +59,17 @@ export function fmtDate(d: Date | string | number, opts: FmtDateOpts = {}): stri
   const yr = date.getUTCFullYear();
   if (short) return `${m} ${day}`;
   return withYear ? `${m} ${day}, ${yr}` : `${m} ${day}`;
+}
+
+/** Date + time down to the second, in UTC. e.g. "Jun 15, 2026, 14:30:05 UTC". */
+export function fmtDateTime(d: Date | string | number): string {
+  const date = d instanceof Date ? d : new Date(d);
+  const pad = (n: number) => n.toString().padStart(2, '0');
+  const m = MONTHS[date.getUTCMonth()];
+  const day = date.getUTCDate();
+  const yr = date.getUTCFullYear();
+  const time = `${pad(date.getUTCHours())}:${pad(date.getUTCMinutes())}:${pad(date.getUTCSeconds())}`;
+  return `${m} ${day}, ${yr}, ${time} UTC`;
 }
 
 export function fmtRelative(target: Date, now: Date): string {

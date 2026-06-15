@@ -78,6 +78,12 @@ the security model in [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## Try it
 
+A hosted build runs against **Neo testnet** at
+[testnet.neovest.xyz](https://testnet.neovest.xyz). It's the recommended way
+to try NeoVest end-to-end first: deploy a vault, create a lock with a token of
+your choice, and exercise claim/revoke against a real chain before touching
+mainnet. Testnet NEO/GAS is free from a [faucet](https://neowish.ngd.network/).
+
 Spin up the UI locally and open the demo vault — Hyperion (HYPR) with 26
 locks across 6 categories — to see the dashboard with realistic data:
 

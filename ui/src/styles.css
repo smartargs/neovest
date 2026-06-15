@@ -882,9 +882,15 @@
 
   .lock-card-head {
     display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap;
     margin-bottom: 8px;
     font-size: 13px;
     color: var(--text-secondary);
+  }
+  .lock-card-head > span { white-space: nowrap; }
+  .lock-card-note {
+    min-width: 0; max-width: 32ch;
+    overflow: hidden; text-overflow: ellipsis;
   }
   .lock-card-amount {
     font-family: 'JetBrains Mono', monospace;

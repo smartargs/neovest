@@ -232,6 +232,11 @@ function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps)
   const totalLocked = locks.reduce((s, l) => s + l.amount, 0);
   const { decimals: aggDec, symbol: aggSym } = useAggregateTokenMeta(locks);
 
+  const claimableLockIds = locks.filter((l) => (claimableByLock[l.id] ?? 0) > 0).map((l) => l.id);
+  async function claimAll() {
+    for (const id of claimableLockIds) await onClaim(id);
+  }
+
   return (
     <div>
       <div className="card card-pad" style={{ marginBottom: 16 }}>
@@ -262,7 +267,11 @@ function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps)
               </span>
             </div>
           </div>
-          <button className="btn btn-primary btn-lg">
+          <button
+            className="btn btn-primary btn-lg"
+            disabled={claimableLockIds.length === 0 || !!pending}
+            onClick={() => void claimAll()}
+          >
             <IconClaim size={14} /> Claim all
           </button>
         </div>
@@ -310,7 +319,7 @@ function BeneficiaryLockCard({
           <span className="sep">·</span>
           <span>From <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.dep}</span></span>
           <span className="sep">·</span>
-          <span style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+          <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
         </div>
         <div className="lock-card-amount">
           {fmtTokenAmount(lock.amount, dec)}{sym}
@@ -442,7 +451,7 @@ function DepositorLockCard({
           <span className="sep">·</span>
           <span>To <span className="mono" style={{ color: 'var(--text-primary)' }}>{lock.ben}</span></span>
           <span className="sep">·</span>
-          <span style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
+          <span className="lock-card-note" style={{ color: 'var(--text-secondary)' }}>"{lock.label}"</span>
         </div>
         <div className="lock-card-amount">
           {fmtTokenAmount(lock.amount, dec)}{sym}

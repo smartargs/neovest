@@ -18,13 +18,6 @@ export function Footer() {
       >
         Verify source
       </a>
-      <span style={{ flex: 1 }} />
-      <span>
-        Made by{' '}
-        <a href="https://smartargs.com" target="_blank" rel="noreferrer">
-          smartargs
-        </a>
-      </span>
     </footer>
   );
 }

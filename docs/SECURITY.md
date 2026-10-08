@@ -149,6 +149,14 @@ amount shown are only as trustworthy as that node.
   key; there is deliberately no URL parameter, so a link cannot point a
   visitor at an attacker's node. While an override is active every page
   shows a red banner naming the endpoint, with a one-click reset.
+- A connected wallet must be on the network the build reads. Contract
+  hashes are the same on every Neo N3 network, and so are NEO and GAS, so
+  a transaction signed by a wallet on the wrong network can execute for
+  real there while the page shows another chain's state. When the wallet
+  reports a different network (NeoLine chain id, WalletConnect chain
+  reference) the dashboard covers the whole page with a blocking dialog
+  until the wallet is switched or disconnected, and every write handler
+  refuses to submit.
 - Before signing a transaction, compare the contract hash in the wallet
   prompt with the hash in the page URL, and the hash in the URL with the
   one published by the project. The dashboard cannot do that for you.

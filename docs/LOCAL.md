@@ -210,8 +210,11 @@ already vested.
 - **No banner at the top of the page / "mainnet" shown on the deploy page**:
   Vite hasn't picked up your `.env.local`. Make sure the file is
   `ui/.env.local` (not `.env.example`), then restart `npm run dev`.
-- **Wallet says "wrong network"**: NeoLine remembers the last network. Open
-  the extension, switch to your `localnet`, and reload the page.
+- **"Wallet is on the wrong network" dialog covers the page**: the UI is
+  built for one network (`VITE_NETWORK`) and NeoLine is set to another. A
+  localnet build accepts any custom NeoLine network; a testnet or mainnet
+  build needs the matching public network. Switch the network in NeoLine
+  (the connection resets by itself) and reconnect.
 - **`"VV: not owner"` on deposit**: the vault was deployed with a different
   owner than the wallet you're depositing from. Re-deploy with the correct
   `VAULT_OWNER`, or switch wallets.

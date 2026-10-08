@@ -87,6 +87,10 @@ export function Manage() {
       setToast({ kind: 'err', msg: 'Connect a wallet first.' });
       return;
     }
+    if (conn.networkMismatch) {
+      setToast({ kind: 'err', msg: 'Wallet is on the wrong network.' });
+      return;
+    }
     setPendingTx({ kind: 'claim', lockId });
     try {
       const txHash = await txClaim(conn.provider, contractHash, conn.address, lockId);
@@ -108,6 +112,10 @@ export function Manage() {
   const onRevoke = useCallback(async (lockId: number) => {
     if (!conn.provider || !conn.address || !contractHash) {
       setToast({ kind: 'err', msg: 'Connect a wallet first.' });
+      return;
+    }
+    if (conn.networkMismatch) {
+      setToast({ kind: 'err', msg: 'Wallet is on the wrong network.' });
       return;
     }
     setPendingTx({ kind: 'revoke', lockId });
@@ -607,6 +615,10 @@ function CreateLockTab({ today }: { today: Date }) {
     setSubmitError(null);
     if (!conn.provider || !conn.address) {
       setSubmitError('Connect a wallet first.');
+      return;
+    }
+    if (conn.networkMismatch) {
+      setSubmitError('Wallet is on the wrong network.');
       return;
     }
     if (!contractHash) {

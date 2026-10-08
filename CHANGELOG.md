@@ -31,6 +31,10 @@ evolving.
 
 ### Added
 
+- Blocking dialog when the connected wallet is on a different network than
+  the build reads (NeoLine chain id or WalletConnect chain reference versus
+  `VITE_NETWORK`). Claim, revoke, create-lock and deploy also refuse to
+  submit while mismatched. The wallet menu shows the wallet's network.
 - Warning on the create-lock form when the token is NEO: GAS earned by NEO
   held in the vault cannot be withdrawn.
 - Lock detail lists the individual tranches of a stepped schedule.

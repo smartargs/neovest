@@ -4,6 +4,7 @@ import { BrandMark } from './BrandMark';
 import { IconChevronDown, IconSun, IconMoon, IconGitHub } from './icons';
 import { useConnection, type WalletKind } from '@/lib/connection';
 import { isNeoLineAvailable } from '@/lib/wallet/neoline-adapter';
+import { networkLabel } from '@/lib/wallet-network';
 
 interface HeaderProps {
   contractHash?: string;
@@ -117,7 +118,9 @@ function WalletControl() {
         {pickerOpen && (
           <div style={MENU_STYLE} role="menu">
             <div style={{ padding: '8px 10px' }}>
-              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>Connected · {walletLabel}</div>
+              <div style={{ fontSize: 11.5, color: 'var(--text-tertiary)' }}>
+                Connected · {walletLabel} · {networkLabel(state.walletNetwork)}
+              </div>
               <div
                 style={{
                   fontSize: 12,

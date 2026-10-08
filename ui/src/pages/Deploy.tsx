@@ -77,6 +77,10 @@ export function Deploy() {
       setError('Connect a wallet first.');
       return;
     }
+    if (conn.networkMismatch) {
+      setError('Wallet is on the wrong network.');
+      return;
+    }
     if (!ownerValid) {
       setError('Owner must be a valid Neo3 address or 0x-scripthash.');
       return;

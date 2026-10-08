@@ -81,6 +81,7 @@ export interface NeoLineProviderShape {
   readonly address: string;
   readonly publicKey: string;
   readonly network: string;
+  readonly chainId: number | undefined;
   invokeFunction(req: ContractInvocationMulti): Promise<string>;
   signMessage(req: { message: string }): Promise<{ publicKey: string; data: string; salt: string; message: string }>;
 }
@@ -94,6 +95,7 @@ export async function buildNeoLineProvider(): Promise<NeoLineProviderShape> {
     address: acct.address,
     publicKey: acct.publicKey,
     network: nets.defaultNetwork,
+    chainId: nets.chainId,
 
     async invokeFunction(req: ContractInvocationMulti): Promise<string> {
       const signers = (req.signers ?? []).map((s) => toNeoLineSigner(s, acct.address));

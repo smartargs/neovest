@@ -24,6 +24,13 @@ import type { Neo3Provider } from '@cityofzion/appkit-neo3-adapter';
 import { isWalletAvailable } from './appkit';
 import { buildNeoLineProvider, type NeoLineProviderShape } from './wallet/neoline-adapter';
 import type { ContractInvocationMulti } from '@cityofzion/neon-dappkit-types';
+import { defaultNetwork } from './rpc';
+import {
+  walletMatchesApp,
+  walletNetworkFromCaip,
+  walletNetworkFromNeoLine,
+  type WalletNetwork,
+} from './wallet-network';
 
 export type WalletKind = 'neoline' | 'walletconnect';
 
@@ -33,7 +40,7 @@ const STORAGE_KEY = 'neovest.wallet.kind';
 export type ConnectionState =
   | { status: 'connecting' }
   | { status: 'not_connected' }
-  | { status: 'connected'; kind: WalletKind; address: string; network: string };
+  | { status: 'connected'; kind: WalletKind; address: string; network: string; walletNetwork: WalletNetwork };
 
 /** Minimum interface both backends provide; everything the rest of the app uses. */
 export interface UnifiedProvider {
@@ -51,6 +58,8 @@ interface ConnectionCtxValue {
   address: string | undefined;
   /** Whether the WalletConnect path is configured. */
   walletConnectAvailable: boolean;
+  /** True while a connected wallet sits on a different network than this build reads. */
+  networkMismatch: boolean;
 }
 
 const ConnectionCtx = createContext<ConnectionCtxValue | null>(null);
@@ -133,6 +142,7 @@ function DualBackendProvider({ children }: { children: ReactNode }) {
           kind: 'neoline',
           address: neoLineProvider.address,
           network: neoLineProvider.network,
+          walletNetwork: walletNetworkFromNeoLine(neoLineProvider.chainId, neoLineProvider.network),
         });
         return;
       }
@@ -152,6 +162,7 @@ function DualBackendProvider({ children }: { children: ReactNode }) {
           kind: 'walletconnect',
           address: parts[2] ?? '',
           network: parts[1] ?? '',
+          walletNetwork: walletNetworkFromCaip(wcAcct.caipAddress),
         });
         return;
       }
@@ -194,6 +205,7 @@ function DualBackendProvider({ children }: { children: ReactNode }) {
     isConnected: state.status === 'connected',
     address: state.status === 'connected' ? state.address : undefined,
     walletConnectAvailable: true,
+    networkMismatch: isMismatch(state),
   };
 
   return <ConnectionCtx.Provider value={value}>{children}</ConnectionCtx.Provider>;
@@ -234,7 +246,13 @@ function NeoLineOnlyProvider({ children }: { children: ReactNode }) {
     setNeoLineProvider(p);
     setActive(true);
     localStorage.setItem(STORAGE_KEY, 'neoline');
-    setState({ status: 'connected', kind: 'neoline', address: p.address, network: p.network });
+    setState({
+      status: 'connected',
+      kind: 'neoline',
+      address: p.address,
+      network: p.network,
+      walletNetwork: walletNetworkFromNeoLine(p.chainId, p.network),
+    });
   }, []);
 
   const disconnect = useCallback(async () => {
@@ -254,11 +272,16 @@ function NeoLineOnlyProvider({ children }: { children: ReactNode }) {
         isConnected: state.status === 'connected',
         address: state.status === 'connected' ? state.address : undefined,
         walletConnectAvailable: false,
+        networkMismatch: isMismatch(state),
       }}
     >
       {children}
     </ConnectionCtx.Provider>
   );
+}
+
+function isMismatch(state: ConnectionState): boolean {
+  return state.status === 'connected' && !walletMatchesApp(state.walletNetwork, defaultNetwork());
 }
 
 export function useConnection(): ConnectionCtxValue {

@@ -3,7 +3,7 @@
  *
  * Every method maps 1:1 to a `@Safe` method on `VestingVault.java`. They are
  * pure RPC calls (no transaction, no signing); for writes see
- * `lib/transactions.ts` (added when wallet wiring lands).
+ * `lib/transactions.ts`.
  */
 
 import { rpc, sc, u } from '@cityofzion/neon-js';
@@ -12,8 +12,14 @@ import type { Network } from './rpc';
 import { getRpcClient } from './rpc';
 import type { Lock, ScheduleType } from './types';
 import type { CategoryId } from './data';
+import { base64ToBytes, deserializeTranchesFromBase64 } from './tranche-codec';
 
 const SCHEDULE_TYPES: ScheduleType[] = ['cliff', 'linear', 'stepped'];
+
+/** Native NEO token. GAS it generates while held by a vault is not withdrawable. */
+export const NEO_TOKEN_HASH = '0xef4073a0f2b305a38ec4050e4d3d28bc40ea63f5';
+
+const LOCK_FETCH_CONCURRENCY = 8;
 
 // ---------- Stack-item helpers ----------
 
@@ -34,10 +40,9 @@ function asBoolean(item: StackItemJson | undefined): boolean {
 
 function asString(item: StackItemJson | undefined): string {
   if (!item || item.value == null) return '';
-  // ByteString comes back base64-encoded as the value string.
   if (item.type === 'ByteString') {
     try {
-      return atob(item.value as string);
+      return new TextDecoder().decode(base64ToBytes(item.value as string));
     } catch {
       return '';
     }
@@ -48,9 +53,7 @@ function asString(item: StackItemJson | undefined): string {
 /** Decode a 20-byte hash from a ByteString (base64) into a 0x-prefixed big-endian hex string. */
 function asHash160(item: StackItemJson | undefined): string {
   if (!item || item.value == null) return '';
-  // base64 → bytes (little-endian as stored on-chain) → reverse to big-endian
   const bytes = u.base642hex(item.value as string);
-  // Reverse every two characters
   const reversed = (bytes.match(/.{2}/g) || []).reverse().join('');
   return '0x' + reversed;
 }
@@ -61,7 +64,6 @@ function dateFromUnixSec(s: number): Date {
 
 // ---------- Calls ----------
 
-/** Read methods on the vault contract. */
 export async function getLockCount(contractHash: string, network?: Network): Promise<number> {
   const client = getRpcClient(network);
   const r = await client.invokeFunction(stripHex(contractHash), 'getLockCount');
@@ -75,27 +77,25 @@ export async function getLock(contractHash: string, lockId: number, network?: Ne
   ]);
   const top = r.stack?.[0];
   if (!top || top.type === 'Any' || top.value == null) return null;
-  // Lock is serialized by the contract as an Array stack item with field order
-  // matching Lock.java. Decode field-by-field.
   const fields = top.value as StackItemJson[];
   if (!Array.isArray(fields) || fields.length < 16) return null;
   return decodeLockFields(fields);
 }
 
-export async function vestedAmount(contractHash: string, lockId: number, network?: Network): Promise<number> {
+export async function vestedAmount(contractHash: string, lockId: number, network?: Network): Promise<bigint> {
   const client = getRpcClient(network);
   const r = await client.invokeFunction(stripHex(contractHash), 'vestedAmount', [
     sc.ContractParam.integer(lockId),
   ]);
-  return asNumber(r.stack?.[0]);
+  return asBigInt(r.stack?.[0]);
 }
 
-export async function claimableAmount(contractHash: string, lockId: number, network?: Network): Promise<number> {
+export async function claimableAmount(contractHash: string, lockId: number, network?: Network): Promise<bigint> {
   const client = getRpcClient(network);
   const r = await client.invokeFunction(stripHex(contractHash), 'claimableAmount', [
     sc.ContractParam.integer(lockId),
   ]);
-  return asNumber(r.stack?.[0]);
+  return asBigInt(r.stack?.[0]);
 }
 
 /** Returns the vault's bound owner — the only address allowed to deposit. */
@@ -144,10 +144,6 @@ export interface DeployedNefInfo {
  * `script` SHA-256 is the authoritative verification axis; the checksum is
  * a fast pre-filter / fallback. Returns `null` if the contract isn't found
  * or the RPC errors.
- *
- * `getcontractstate` shape:
- * `{ hash, nef: { magic, compiler, source, tokens, script, checksum }, manifest, ... }`
- * where `script` is base64.
  */
 export async function getDeployedNefInfo(contractHash: string, network?: Network): Promise<DeployedNefInfo | null> {
   const client = getRpcClient(network);
@@ -163,40 +159,33 @@ export async function getDeployedNefInfo(contractHash: string, network?: Network
 
     let scriptSha256: string | null = null;
     if (typeof nef.script === 'string' && nef.script.length > 0) {
-      // RPC returns the script base64-encoded; hash the decoded bytes.
       const scriptHex = u.HexString.fromBase64(nef.script).toString();
       scriptSha256 = u.sha256(scriptHex);
     }
 
     return { checksum, scriptSha256 };
   } catch {
-    // Contract not found or RPC error — treat as unknown rather than throwing.
     return null;
   }
 }
 
-/**
- * Convenience wrapper returning just the deployed NEF checksum. Retained for
- * callers that only need the cheap value; prefer {@link getDeployedNefInfo}
- * when you also need the (authoritative) script hash.
- */
 export async function getContractChecksum(contractHash: string, network?: Network): Promise<number | null> {
   const info = await getDeployedNefInfo(contractHash, network);
   return info == null ? null : info.checksum;
 }
 
-export async function totalLocked(contractHash: string, tokenHash: string, network?: Network): Promise<number> {
+export async function totalLocked(contractHash: string, tokenHash: string, network?: Network): Promise<bigint> {
   const client = getRpcClient(network);
   const r = await client.invokeFunction(stripHex(contractHash), 'totalLocked', [
     sc.ContractParam.hash160(stripHex(tokenHash)),
   ]);
-  return asNumber(r.stack?.[0]);
+  return asBigInt(r.stack?.[0]);
 }
 
 export interface TokenInfo {
   symbol: string;
   decimals: number;
-  totalSupply: number;
+  totalSupply: bigint;
 }
 
 /**
@@ -214,7 +203,7 @@ export async function getTokenInfo(tokenHash: string, network?: Network): Promis
     return {
       symbol: asString(sym.stack?.[0]),
       decimals: asNumber(dec.stack?.[0]),
-      totalSupply: asNumber(sup.stack?.[0]),
+      totalSupply: asBigInt(sup.stack?.[0]),
     };
   } catch {
     return null;
@@ -239,7 +228,6 @@ async function readLockIdsByIndex(
   if (!iteratorId) return [];
 
   const ids: number[] = [];
-  // Page through up to a sensible cap. RPC limits ~100 per call.
   for (let i = 0; i < 10; i++) {
     const traverse = await client.execute(
       rpc.Query.traverseIterator(sessionId, iteratorId, 100),
@@ -248,7 +236,6 @@ async function readLockIdsByIndex(
     for (const item of traverse) ids.push(asNumber(item as unknown as StackItemJson));
     if (traverse.length < 100) break;
   }
-  // Best-effort session cleanup; don't error if the node already reaped it.
   try {
     await fetch(getRpcClient(network).url, {
       method: 'POST',
@@ -274,16 +261,22 @@ export function getLocksByToken(contractHash: string, token: string, network?: N
 }
 
 /**
- * Convenience: enumerate every lock in the vault. Reads getLockCount, then
- * fetches each lock 1..count via {@link getLock}. Cheap for vaults with up
- * to a few hundred locks; larger vaults should paginate.
+ * Enumerate every lock in the vault: getLockCount, then getLock for
+ * 1..count with a bounded number of requests in flight so public RPC
+ * nodes are not flooded.
  */
 export async function getAllLocks(contractHash: string, network?: Network): Promise<Lock[]> {
   const count = await getLockCount(contractHash, network);
-  const locks = await Promise.all(
-    Array.from({ length: count }, (_, i) => getLock(contractHash, i + 1, network)),
-  );
-  return locks.filter((l): l is Lock => l != null);
+  const results: (Lock | null)[] = new Array(count).fill(null);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < count) {
+      const i = nextIndex++;
+      results[i] = await getLock(contractHash, i + 1, network);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(LOCK_FETCH_CONCURRENCY, count) }, worker));
+  return results.filter((l): l is Lock => l != null);
 }
 
 // ---------- Internal: Lock decoding ----------
@@ -293,13 +286,12 @@ function decodeLockFields(fields: StackItemJson[]): Lock {
   const depositor     = asHash160(fields[1]);
   const beneficiary   = asHash160(fields[2]);
   const token         = asHash160(fields[3]);
-  const totalAmount   = asNumber(fields[4]);
-  const claimedAmount = asNumber(fields[5]);
+  const amountRaw     = asBigInt(fields[4]);
+  const claimedRaw    = asBigInt(fields[5]);
   const scheduleByte  = asNumber(fields[6]);
   const startTime     = asNumber(fields[7]);
   const endTime       = asNumber(fields[8]);
   const cliffTime     = asNumber(fields[9]);
-  // tranches blob (fields[10]) not decoded here — do it on demand for stepped views
   const category      = asString(fields[11]);
   const note          = asString(fields[12]);
   const createdAt     = asNumber(fields[13]);
@@ -308,18 +300,22 @@ function decodeLockFields(fields: StackItemJson[]): Lock {
   const revokedAtSec  = fields[16] ? asNumber(fields[16]) : 0;
 
   const type = SCHEDULE_TYPES[scheduleByte] ?? 'cliff';
+  const tranches = type === 'stepped' ? decodeTranches(fields[10]) : undefined;
 
   return {
     id: lockId,
     depositor,
     beneficiary,
     token,
-    amount: totalAmount,
-    claimed: claimedAmount,
+    amount: Number(amountRaw),
+    amountRaw,
+    claimed: Number(claimedRaw),
+    claimedRaw,
     type,
     start: dateFromUnixSec(startTime),
     end: dateFromUnixSec(endTime),
     cliff: cliffTime > 0 ? dateFromUnixSec(cliffTime) : undefined,
+    tranches,
     category: (category as CategoryId) || 'other',
     note,
     createdAt: dateFromUnixSec(createdAt),
@@ -327,13 +323,24 @@ function decodeLockFields(fields: StackItemJson[]): Lock {
     revoked,
     revokedAt: revokedAtSec > 0 ? dateFromUnixSec(revokedAtSec) : undefined,
 
-    // Backward-compat aliases (some components still read .cat / .ben / .dep / .rev / .label)
     cat: (category as CategoryId) || 'other',
     ben: beneficiary,
     dep: depositor,
     rev: revocable,
     label: note,
   };
+}
+
+function decodeTranches(item: StackItemJson | undefined): Lock['tranches'] {
+  if (!item || item.type !== 'ByteString' || typeof item.value !== 'string' || !item.value) return undefined;
+  try {
+    return deserializeTranchesFromBase64(item.value).map((t) => ({
+      ts: dateFromUnixSec(t.ts),
+      amount: Number(t.amount),
+    }));
+  } catch {
+    return undefined;
+  }
 }
 
 function stripHex(s: string): string {

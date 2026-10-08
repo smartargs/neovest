@@ -10,11 +10,12 @@ import type { TokenInfo } from './contract';
 
 export const DEMO_HASH = 'demo';
 
+const HYPR_RAW = 100_000_000n;
+
 export const DEMO_TOKEN: TokenInfo = {
   symbol: 'HYPR',
   decimals: 8,
-  // 10 B HYPR fixed supply.
-  totalSupply: 10_000_000_000 * 100_000_000,
+  totalSupply: 10_000_000_000n * HYPR_RAW,
 };
 
 const DEMO_TOKEN_HASH = '0x9c51fb6a3e5f841d72d3a8c9b1e2d4f5a6b7c812';
@@ -22,7 +23,6 @@ const DEMO_TOKEN_HASH = '0x9c51fb6a3e5f841d72d3a8c9b1e2d4f5a6b7c812';
 /** Today, baked in so the dashboard shows a meaningful snapshot. */
 const TODAY = new Date('2026-05-09T12:00:00Z');
 
-/** Helper: ISO date string → Date, UTC midnight. */
 const D = (s: string) => new Date(s + 'T00:00:00Z');
 
 interface DemoLockSeed {
@@ -85,17 +85,18 @@ const SEEDS: DemoLockSeed[] = [
   { id: 53, cat: 'partner',  ben: 'NPaRtN3rDr1FtW2aLeT9Mb5Nz7Hg9Vc1Pq3', benLabel: 'Drift Wallet',          amount:  60_000_000, type: 'linear', start: D('2026-06-01'), end: D('2028-06-01'),                          rev: false },
 ];
 
-const HYPR = 100_000_000;
-
-/** Adapt a seed into the full {@link Lock} shape used by the dashboard. */
 function expand(seed: DemoLockSeed): Lock {
+  const amountRaw = BigInt(seed.amount) * HYPR_RAW;
+  const claimedRaw = BigInt(seed.claimed ?? 0) * HYPR_RAW;
   return {
     id: seed.id,
     depositor: DEPOSITOR,
     beneficiary: seed.ben,
     token: DEMO_TOKEN_HASH,
-    amount: seed.amount * HYPR,
-    claimed: (seed.claimed ?? 0) * HYPR,
+    amount: Number(amountRaw),
+    amountRaw,
+    claimed: Number(claimedRaw),
+    claimedRaw,
     type: seed.type,
     start: seed.start,
     end: seed.end,
@@ -105,7 +106,6 @@ function expand(seed: DemoLockSeed): Lock {
     createdAt: seed.start,
     revocable: seed.rev,
     revoked: false,
-    // Backward-compat aliases the UI components still read:
     cat: seed.cat,
     ben: seed.ben,
     dep: DEPOSITOR,

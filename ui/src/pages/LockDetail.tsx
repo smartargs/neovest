@@ -12,15 +12,13 @@ export function LockDetail() {
   const { lockId, contractHash } = useParams<{ lockId: string; contractHash: string }>();
   const lockIdNum = lockId ? parseInt(lockId, 10) : undefined;
   const { data: rawLock, isLoading } = useLock(contractHash ?? '', lockIdNum);
-  // Cast at the boundary — types.Lock from the hook is structurally
-  // identical to the display Lock the components were written against.
   const lock = (rawLock ?? null) as unknown as Lock | null;
   const today = useNow();
   const { data: tokenInfo } = useTokenInfo(lock?.token);
   const tokenDec = tokenInfo?.decimals;
   const tokenSym = tokenInfo?.symbol;
-  const { data: vested = 0 } = useVested(contractHash ?? '', lockIdNum);
-  const { data: claimable = 0 } = useClaimable(contractHash ?? '', lockIdNum);
+  const { data: vested = 0n } = useVested(contractHash ?? '', lockIdNum);
+  const { data: claimable = 0n } = useClaimable(contractHash ?? '', lockIdNum);
 
   if (isLoading && !lock) {
     return (
@@ -41,8 +39,10 @@ export function LockDetail() {
     );
   }
 
-  const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
-  const claimedPct = lock.amount > 0 ? ((lock.claimed ?? 0) / lock.amount) * 100 : 0;
+  const claimedRaw = lock.claimedRaw ?? 0n;
+  const pct = lock.amount > 0 ? (Number(vested) / lock.amount) * 100 : 0;
+  const claimedPct = lock.amount > 0 ? (Number(claimedRaw) / lock.amount) * 100 : 0;
+  const symSuffix = tokenSym ? ` ${tokenSym}` : '';
 
   return (
     <div>
@@ -81,7 +81,7 @@ export function LockDetail() {
                 )}
                 <div style={{ fontSize: 13, color: 'var(--text-secondary)', maxWidth: 380 }}>
                   Vesting was stopped and the unvested balance returned to the depositor.
-                  The beneficiary keeps the {fmtTokenAmount(lock.amount, tokenDec)}{tokenSym ? ` ${tokenSym}` : ''} that had vested at that point.
+                  The beneficiary keeps the {fmtTokenAmount(lock.amountRaw, tokenDec)}{symSuffix} that had vested at that point.
                 </div>
               </div>
             ) : (
@@ -94,16 +94,30 @@ export function LockDetail() {
               {tokenSym ? <strong>{tokenSym}</strong> : null}{' '}
               {lock.token ? shortHash(lock.token) : '—'}
             </dd>
-            <dt>Total amount</dt><dd>{fmtTokenAmount(lock.amount, tokenDec)}{tokenSym ? ` ${tokenSym}` : ''}</dd>
+            <dt>Total amount</dt><dd>{fmtTokenAmount(lock.amountRaw, tokenDec)}{symSuffix}</dd>
             <dt>Vested today</dt><dd>{fmtTokenAmount(vested, tokenDec)} ({pct.toFixed(1)}%)</dd>
-            <dt>Claimed</dt><dd>{fmtTokenAmount(lock.claimed ?? 0, tokenDec)} ({lock.amount > 0 ? (((lock.claimed ?? 0) / lock.amount) * 100).toFixed(1) : '0'}%)</dd>
+            <dt>Claimed</dt><dd>{fmtTokenAmount(claimedRaw, tokenDec)} ({claimedPct.toFixed(1)}%)</dd>
             <dt>Claimable</dt>
-            <dd style={{ color: claimable > 0 ? 'var(--success)' : 'var(--text-primary)' }}>
+            <dd style={{ color: claimable > 0n ? 'var(--success)' : 'var(--text-primary)' }}>
               {fmtTokenAmount(claimable, tokenDec)}
             </dd>
             <dt>Starts</dt><dd>{fmtDateTime(lock.start)}</dd>
             {lock.cliff && (<><dt>Cliff</dt><dd>{fmtDateTime(lock.cliff)}</dd></>)}
             <dt>Fully vested</dt><dd>{fmtDateTime(lock.end)}</dd>
+            {lock.type === 'stepped' && lock.tranches && (
+              <>
+                <dt>Tranches</dt>
+                <dd>
+                  <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {lock.tranches.map((t, i) => (
+                      <li key={i} className="mono" style={{ fontSize: 12 }}>
+                        {fmtDateTime(t.ts)} · {fmtTokenAmount(t.amount, tokenDec, { compact: true })}{symSuffix}
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </>
+            )}
             <dt>Revocable</dt><dd>{lock.rev ? 'Yes' : 'No'}</dd>
             {lock.revoked && (<><dt>Status</dt><dd style={{ color: 'var(--danger)' }}>Revoked{lock.revokedAt ? ` · ${fmtDateTime(lock.revokedAt)}` : ''}</dd></>)}
           </dl>

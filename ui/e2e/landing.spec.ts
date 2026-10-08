@@ -41,8 +41,13 @@ test('lookup: a malformed hash shows an inline error and does not navigate', asy
 
 test('lookup: a well-formed but undeployed hash reports "no contract deployed"', async ({ page }) => {
   // Point at a closed port so contractExists() fails fast and deterministically
-  // instead of reaching the public default RPC.
-  await page.goto('/?rpc=' + encodeURIComponent('http://127.0.0.1:9'));
+  // instead of reaching the public default RPC. The override lives in
+  // localStorage only; there is deliberately no URL parameter for it.
+  await page.addInitScript(() => {
+    window.localStorage.setItem('neovest.rpc', 'http://127.0.0.1:9');
+  });
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('Custom RPC endpoint in use');
   await page.getByPlaceholder(HASH_INPUT).fill('0x' + 'a'.repeat(40));
   await page.getByRole('button', { name: 'Open' }).click();
   await expect(page.getByText(/No contract deployed at this hash/)).toBeVisible({ timeout: 15_000 });
@@ -66,4 +71,21 @@ test('the demo vault renders directly from /v/demo', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Vesting Dashboard' })).toBeVisible();
   await expect(page.locator('.stat-grid')).toBeVisible();
   errs.check();
+});
+
+test('a custom RPC override shows a warning that resets to the default node', async ({ page }) => {
+  await page.goto('/v/demo');
+  await page.evaluate(() => window.localStorage.setItem('neovest.rpc', 'http://127.0.0.1:9'));
+  await page.reload();
+  await expect(page.getByRole('alert')).toContainText('http://127.0.0.1:9');
+  await page.getByRole('button', { name: 'Reset to default' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  expect(await page.evaluate(() => window.localStorage.getItem('neovest.rpc'))).toBeNull();
+});
+
+test('the production bundle carries a Content-Security-Policy', async ({ page }) => {
+  await page.goto('/');
+  const csp = await page.locator('meta[http-equiv="Content-Security-Policy"]').getAttribute('content');
+  expect(csp).toContain("script-src 'self'");
+  expect(csp).toContain("object-src 'none'");
 });

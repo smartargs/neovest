@@ -3,13 +3,13 @@
  * lock contents come from the on-chain hooks in `lib/hooks.ts`.
  */
 
-import type { ScheduleType } from './vesting-math';
+import type { ScheduleType, ScheduleTranche } from './vesting-math';
 import { vestedAt } from './vesting-math';
 
 export interface Token {
   symbol: string;
   name: string;
-  totalSupply: number;
+  totalSupply: bigint;
   decimals: number;
 }
 
@@ -28,16 +28,19 @@ export interface Lock {
   label: string;
   dep: string;
   amount: number;
+  amountRaw: bigint;
   type: ScheduleType;
   start: Date;
   end: Date;
   cliff?: Date;
-  steps?: number;
+  tranches?: ScheduleTranche[];
   rev: boolean;
   revoked?: boolean;
   revokedAt?: Date;
   claimed?: number;
+  claimedRaw?: bigint;
   token?: string;
+  createdAt?: Date;
 }
 
 export interface TimelineSeries {
@@ -53,7 +56,6 @@ export const CATEGORIES: Category[] = [
   { id: 'partner',  name: 'Partners',  color: 'var(--cat-partner)' },
 ];
 
-/** Re-export so call sites can import everything from `@/lib/data`. */
 export { vestedAt };
 
 const KNOWN_CATEGORY_IDS: ReadonlySet<string> = new Set(CATEGORIES.map((c) => c.id));
@@ -76,13 +78,11 @@ export function categoryName(catId: CategoryId | string): string {
     public: 'Public', advisor: 'Advisors', partner: 'Partners', other: 'Other',
   };
   if (map[catId]) return map[catId];
-  // Title-case a free-form category id for display.
   const s = String(catId).trim();
   if (!s) return 'Uncategorized';
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Stable hash → 0..359 hue. djb2-ish; collisions are visually fine. */
 function stringHue(s: string): number {
   let h = 5381;
   for (let i = 0; i < s.length; i++) {
@@ -100,6 +100,9 @@ export function scheduleSummary(lock: Lock): string {
       : 0;
     return cliffYrs ? `Linear ${yrs}y / ${cliffYrs}y cliff` : `Linear ${yrs}y`;
   }
-  if (lock.type === 'stepped') return `Stepped / ${lock.steps ?? 4} steps`;
+  if (lock.type === 'stepped') {
+    const n = lock.tranches?.length;
+    return n ? `Stepped / ${n} tranche${n === 1 ? '' : 's'}` : 'Stepped';
+  }
   return lock.type;
 }

@@ -1,14 +1,15 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { categoryColor, scheduleSummary, vestedAt, type Lock } from '@/lib/data';
+import { categoryColor, scheduleSummary, type Lock } from '@/lib/data';
 import {
   useAllLocks, useOwner, useTokenInfo, useAggregateTokenMeta,
   useVested, useClaimable, useClaimableForLocks, useNow,
 } from '@/lib/hooks';
 import { isDemoVault, DEMO_LOCKS } from '@/lib/demo-data';
 import { addToHistory } from '@/lib/vault-history';
-import { parseLockForm, normalizeHashOrAddress } from '@/lib/lock-form';
+import { parseLockForm, normalizeHashOrAddress, utf8ByteLength, MAX_CATEGORY_BYTES, MAX_NOTE_BYTES } from '@/lib/lock-form';
+import { NEO_TOKEN_HASH } from '@/lib/contract';
 import { toNeoAddress } from '@/lib/address';
 import { fmtDate, fmtDateTime, fmtRelative, fmtTokenAmount } from '@/lib/format';
 import { CategoryPill } from '@/components/CategoryPill';
@@ -229,11 +230,11 @@ interface BeneficiaryTabProps extends TabProps {
 function BeneficiaryTab({ locks, today, onClaim, pending }: BeneficiaryTabProps) {
   const { contractHash } = useParams<{ contractHash: string }>();
   const claimableByLock = useClaimableForLocks(contractHash ?? '', locks.map((l) => l.id));
-  const totalClaimable = locks.reduce((s, l) => s + (claimableByLock[l.id] ?? 0), 0);
-  const totalLocked = locks.reduce((s, l) => s + l.amount, 0);
+  const totalClaimable = locks.reduce((s, l) => s + (claimableByLock[l.id] ?? 0n), 0n);
+  const totalLocked = locks.reduce((s, l) => s + l.amountRaw, 0n);
   const { decimals: aggDec, symbol: aggSym } = useAggregateTokenMeta(locks);
 
-  const claimableLockIds = locks.filter((l) => (claimableByLock[l.id] ?? 0) > 0).map((l) => l.id);
+  const claimableLockIds = locks.filter((l) => (claimableByLock[l.id] ?? 0n) > 0n).map((l) => l.id);
   async function claimAll() {
     for (const id of claimableLockIds) await onClaim(id);
   }
@@ -305,11 +306,11 @@ function BeneficiaryLockCard({
   const { data: tokenInfo } = useTokenInfo(lock.token);
   const dec = tokenInfo?.decimals;
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
-  const { data: vested = 0 } = useVested(contractHash ?? '', lock.id);
-  const { data: claimable = 0 } = useClaimable(contractHash ?? '', lock.id);
-  const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
-  const claimedPct = lock.amount > 0 ? ((lock.claimed ?? 0) / lock.amount) * 100 : 0;
-  const isLocked = vested === 0;
+  const { data: vested = 0n } = useVested(contractHash ?? '', lock.id);
+  const { data: claimable = 0n } = useClaimable(contractHash ?? '', lock.id);
+  const pct = lock.amount > 0 ? (Number(vested) / lock.amount) * 100 : 0;
+  const claimedPct = lock.amount > 0 ? (Number(lock.claimedRaw ?? 0n) / lock.amount) * 100 : 0;
+  const isLocked = vested === 0n;
   const cliffSoon =
     lock.cliff && lock.cliff > today && lock.cliff.getTime() - today.getTime() < 60 * 24 * 3600 * 1000;
 
@@ -329,7 +330,7 @@ function BeneficiaryLockCard({
           {lock.revoked && <span className="lock-tag-revoked">Revoked</span>}
         </div>
         <div className="lock-card-amount">
-          {fmtTokenAmount(lock.amount, dec)}{sym}
+          {fmtTokenAmount(lock.amountRaw, dec)}{sym}
         </div>
         <div className="lock-card-meta">
           {scheduleSummary(lock)} · {fmtDateTime(lock.start)} → {fmtDateTime(lock.end)}
@@ -339,7 +340,7 @@ function BeneficiaryLockCard({
           <span className="mono" style={{ fontSize: 12, color: 'var(--text-primary)' }}>
             {pct.toFixed(0)}% vested
           </span>
-          {claimable > 0 ? (
+          {claimable > 0n ? (
             <span style={{ color: 'var(--success)' }}>
               · Claimable:{' '}
               <span className="mono" style={{ fontWeight: 500 }}>{fmtTokenAmount(claimable, dec, { compact: true })}{sym}</span>
@@ -358,13 +359,13 @@ function BeneficiaryLockCard({
         <div className="lock-card-progress">
           <ProgressSeg pct={claimedPct} color="var(--success)" segments={14} />
           <span className="mono" style={{ fontSize: 12, color: 'var(--text-primary)' }}>{claimedPct.toFixed(0)}% claimed</span>
-          {(lock.claimed ?? 0) > 0 && (
-            <span style={{ color: 'var(--text-tertiary)' }}>· {fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
+          {(lock.claimedRaw ?? 0n) > 0n && (
+            <span style={{ color: 'var(--text-tertiary)' }}>· {fmtTokenAmount(lock.claimedRaw ?? 0n, dec, { compact: true })}{sym}</span>
           )}
         </div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8 }}>
-        {claimable > 0 ? (
+        {claimable > 0n ? (
           <button
             className={'btn btn-primary' + (pendingClaim ? ' btn-disabled' : '')}
             onClick={() => onClaim(lock.id)}
@@ -391,11 +392,12 @@ interface DepositorTabProps extends TabProps {
   pending: { kind: 'claim' | 'revoke'; lockId: number } | null;
 }
 
-function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
-  const total = locks.reduce((s, l) => s + l.amount, 0);
+function DepositorTab({ locks, onRevoke, pending }: DepositorTabProps) {
+  const [showAll, setShowAll] = useState(false);
+  const total = locks.reduce((s, l) => s + l.amountRaw, 0n);
   const { decimals: aggDec, symbol: aggSym } = useAggregateTokenMeta(locks);
   const revoked = locks.filter((l) => l.revoked).length;
-  const visible = locks.slice(0, 10);
+  const visible = showAll ? locks : locks.slice(0, 10);
 
   return (
     <div>
@@ -427,7 +429,6 @@ function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
           <DepositorLockCard
             key={l.id}
             lock={l}
-            today={today}
             onRevoke={onRevoke}
             pendingRevoke={pending?.kind === 'revoke' && pending.lockId === l.id}
           />
@@ -435,7 +436,7 @@ function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
       </div>
       {locks.length > visible.length && (
         <div style={{ textAlign: 'center', marginTop: 16 }}>
-          <button className="btn btn-secondary">Show all {locks.length} locks</button>
+          <button className="btn btn-secondary" onClick={() => setShowAll(true)}>Show all {locks.length} locks</button>
         </div>
       )}
     </div>
@@ -443,10 +444,9 @@ function DepositorTab({ locks, today, onRevoke, pending }: DepositorTabProps) {
 }
 
 function DepositorLockCard({
-  lock, today, onRevoke, pendingRevoke,
+  lock, onRevoke, pendingRevoke,
 }: {
   lock: Lock;
-  today: Date;
   onRevoke: (lockId: number) => void | Promise<void>;
   pendingRevoke: boolean;
 }) {
@@ -454,11 +454,10 @@ function DepositorLockCard({
   const { data: tokenInfo } = useTokenInfo(lock.token);
   const dec = tokenInfo?.decimals;
   const sym = tokenInfo?.symbol ? ` ${tokenInfo.symbol}` : '';
-  const vested = vestedAt(lock, today);
-  const pct = lock.amount > 0 ? (vested / lock.amount) * 100 : 0;
-  const claimedPct = lock.amount > 0 ? ((lock.claimed ?? 0) / lock.amount) * 100 : 0;
-  const { data: chainVested = 0 } = useVested(contractHash ?? '', lock.id);
-  const canRevoke = lock.rev && !lock.revoked && lock.amount - chainVested > 0;
+  const { data: chainVested } = useVested(contractHash ?? '', lock.id);
+  const pct = chainVested != null && lock.amount > 0 ? (Number(chainVested) / lock.amount) * 100 : 0;
+  const claimedPct = lock.amount > 0 ? (Number(lock.claimedRaw ?? 0n) / lock.amount) * 100 : 0;
+  const canRevoke = lock.rev && !lock.revoked && chainVested != null && lock.amountRaw - chainVested > 0n;
 
   return (
     <div className="lock-card">
@@ -476,10 +475,10 @@ function DepositorLockCard({
           {lock.revoked && <span className="lock-tag-revoked">Revoked</span>}
         </div>
         <div className="lock-card-amount">
-          {fmtTokenAmount(lock.amount, dec)}{sym}
+          {fmtTokenAmount(lock.amountRaw, dec)}{sym}
         </div>
         <div className="lock-card-meta">
-          {scheduleSummary(lock)} · Created {fmtDate(lock.start)} · Revocable:{' '}
+          {scheduleSummary(lock)} · Created {fmtDate(lock.createdAt ?? lock.start)} · Revocable:{' '}
           <span style={{ color: lock.rev ? 'var(--warning)' : 'var(--text-primary)' }}>
             {lock.rev ? 'Yes' : 'No'}
           </span>
@@ -491,8 +490,8 @@ function DepositorLockCard({
         <div className="lock-card-progress">
           <ProgressSeg pct={claimedPct} color="var(--success)" segments={14} />
           <span className="mono" style={{ fontSize: 12, color: 'var(--text-primary)' }}>{claimedPct.toFixed(0)}% claimed</span>
-          {(lock.claimed ?? 0) > 0 && (
-            <span style={{ color: 'var(--text-tertiary)' }}>· {fmtTokenAmount(lock.claimed, dec, { compact: true })}{sym}</span>
+          {(lock.claimedRaw ?? 0n) > 0n && (
+            <span style={{ color: 'var(--text-tertiary)' }}>· {fmtTokenAmount(lock.claimedRaw ?? 0n, dec, { compact: true })}{sym}</span>
           )}
         </div>
       </div>
@@ -580,21 +579,28 @@ function CreateLockTab({ today }: { today: Date }) {
   }), [tokenInput, beneficiaryInput, amountInput, startInput, endInput, cliffInput, stepsInput,
        categoryInput, noteInput, scheduleType, revocable, decimals]);
 
-  const previewLock: Lock = useMemo(() => ({
-    id: 0,
-    cat: categoryInput,
-    type: scheduleType,
-    start: parsed.ok ? new Date(parsed.startSec * 1000) : defaultStart,
-    end:   parsed.ok ? new Date(parsed.endSec * 1000)   : defaultEnd,
-    cliff: parsed.ok && parsed.cliffSec ? new Date(parsed.cliffSec * 1000) : undefined,
-    steps: scheduleType === 'stepped' ? Number(stepsInput) || 4 : undefined,
-    amount: parsed.ok ? Number(parsed.amountRaw) : 1_000_000_00,
-    rev: revocable,
-    ben: beneficiaryInput || '0xA1b3…3Bf2',
-    dep: conn.address ?? '',
-    label: noteInput,
-    claimed: 0,
-  } as Lock), [categoryInput, scheduleType, parsed, defaultStart, defaultEnd, revocable, beneficiaryInput, conn.address, noteInput, stepsInput]);
+  const previewLock: Lock = useMemo(() => {
+    const amountRaw = parsed.ok ? parsed.amountRaw : 100_000_000n;
+    return {
+      id: 0,
+      cat: categoryInput,
+      type: scheduleType,
+      start: parsed.ok ? new Date(parsed.startSec * 1000) : defaultStart,
+      end:   parsed.ok ? new Date(parsed.endSec * 1000)   : defaultEnd,
+      cliff: parsed.ok && parsed.cliffSec ? new Date(parsed.cliffSec * 1000) : undefined,
+      tranches: parsed.ok && parsed.tranches
+        ? parsed.tranches.map((t) => ({ ts: new Date(t.ts * 1000), amount: Number(t.amount) }))
+        : undefined,
+      amount: Number(amountRaw),
+      amountRaw,
+      rev: revocable,
+      ben: beneficiaryInput || '0xA1b3…3Bf2',
+      dep: conn.address ?? '',
+      label: noteInput,
+      claimed: 0,
+      claimedRaw: 0n,
+    };
+  }, [categoryInput, scheduleType, parsed, defaultStart, defaultEnd, revocable, beneficiaryInput, conn.address, noteInput]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -629,7 +635,7 @@ function CreateLockTab({ today }: { today: Date }) {
         revocable,
       });
       const log = await waitForTx(txHash);
-      const lockId = extractLockIdFromLog(log);
+      const lockId = extractLockIdFromLog(log, contractHash);
       // Invalidate dashboards/iterators so the new lock shows up.
       void qc.invalidateQueries({ queryKey: ['allLocks', contractHash] });
       void qc.invalidateQueries({ queryKey: ['lockCount', contractHash] });
@@ -739,6 +745,25 @@ function CreateLockTab({ today }: { today: Date }) {
           Only <span className="mono">{shortAddr(owner ?? '')}</span> can create locks here. You're
           connected as <span className="mono">{shortAddr(meHash ?? '')}</span>. Switch wallets in
           NeoLine to continue.
+        </div>
+      )}
+
+      {normalizedToken === NEO_TOKEN_HASH && (
+        <div
+          style={{
+            marginBottom: 16,
+            padding: '10px 14px',
+            background: 'var(--warning-muted)',
+            color: 'var(--text-primary)',
+            border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
+            borderRadius: 6,
+            fontSize: 12.5,
+          }}
+        >
+          <strong style={{ color: 'var(--warning)' }}>Vesting NEO strands its GAS.</strong>{' '}
+          NEO held by the vault generates GAS, but the vault has no way to withdraw it, so that GAS
+          is lost to both the owner and the beneficiary for as long as the NEO sits in the vault.
+          Vest a different asset unless you accept that loss.
         </div>
       )}
 
@@ -892,7 +917,7 @@ function CreateLockTab({ today }: { today: Date }) {
               <span className="hint">
                 The category this lock is assigned to. Pick a built-in or type your own.
               </span>
-              <span className="hint mono">{categoryInput.length} / 32</span>
+              <span className="hint mono">{utf8ByteLength(categoryInput)} / {MAX_CATEGORY_BYTES}</span>
             </div>
           </div>
 
@@ -908,7 +933,7 @@ function CreateLockTab({ today }: { today: Date }) {
             />
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <span className="hint">Stored on-chain. Visible to everyone.</span>
-              <span className="hint mono">{noteInput.length} / 256</span>
+              <span className="hint mono">{utf8ByteLength(noteInput)} / {MAX_NOTE_BYTES}</span>
             </div>
           </div>
 
@@ -997,7 +1022,9 @@ function CreateLockTab({ today }: { today: Date }) {
               <dd>
                 {scheduleType === 'cliff'
                   ? 'Cliff'
-                  : (parsed.ok && parsed.cliffSec ? 'Linear with cliff' : 'Linear')}
+                  : scheduleType === 'stepped'
+                    ? `Stepped / ${parsed.ok && parsed.tranches ? parsed.tranches.length : stepsInput || '?'} tranches`
+                    : (parsed.ok && parsed.cliffSec ? 'Linear with cliff' : 'Linear')}
               </dd>
               <dt>Starts</dt>
               <dd>{parsed.ok ? fmtDateTime(new Date(parsed.startSec * 1000)) : '—'}</dd>
@@ -1187,15 +1214,17 @@ function CategoryCombobox({
   );
 }
 
-/** Pull the lock id from the contract's `LockCreated` event in an applog. */
-function extractLockIdFromLog(log: unknown): number | undefined {
-  type Notif = { eventname?: string; state?: { value?: { type?: string; value?: string }[] } };
+/** Pull the lock id from the vault's own `LockCreated` event in an applog. */
+function extractLockIdFromLog(log: unknown, vaultHash: string): number | undefined {
+  type Notif = { contract?: string; eventname?: string; state?: { value?: { type?: string; value?: string }[] } };
   type Exec = { notifications?: Notif[] };
   type Log = { executions?: Exec[] };
+  const vault = vaultHash.replace(/^0x/i, '').toLowerCase();
   const execs = (log as Log)?.executions ?? [];
   for (const e of execs) {
     for (const n of e.notifications ?? []) {
       if (n.eventname !== 'LockCreated') continue;
+      if (n.contract && n.contract.replace(/^0x/i, '').toLowerCase() !== vault) continue;
       const items = n.state?.value;
       if (!items || items.length === 0) continue;
       const v = items[0].value;

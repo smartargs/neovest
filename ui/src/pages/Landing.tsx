@@ -40,7 +40,7 @@ const HOW_IT_WORKS: { t: string; d: string }[] = [
   },
   {
     t: 'Schedule types.',
-    d: 'Cliff or linear schedules with optional cliff, configurable per beneficiary. Stepped schedules are supported on-chain; UI form is on the roadmap.',
+    d: 'Cliff, linear with an optional cliff, or stepped tranches, configurable per beneficiary.',
   },
   {
     t: 'Beneficiary-controlled claims.',
@@ -48,7 +48,7 @@ const HOW_IT_WORKS: { t: string; d: string }[] = [
   },
   {
     t: 'Verifiable bytecode.',
-    d: 'The dashboard cross-checks the deployed contract’s NEF checksum against the audited source bundled with this build.',
+    d: 'The dashboard hashes the deployed contract’s script and compares it with the audited source bundled in this build.',
   },
 ];
 

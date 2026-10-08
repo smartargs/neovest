@@ -59,9 +59,19 @@ src/
 ├── App.tsx                 # router + theme/shell
 ├── styles.css              # design tokens + base styles (port of design's CSS)
 ├── lib/
-│   ├── data.ts             # mock data (replace with on-chain hooks)
-│   ├── format.ts           # number/date formatting helpers
+│   ├── contract.ts         # RPC reads: lock decoding, token info, bytecode facts
+│   ├── hooks.ts            # TanStack Query hooks over contract.ts (+ demo short-circuit)
+│   ├── transactions.ts     # wallet-signed createLock / claim / revoke
+│   ├── deploy.ts           # in-browser ContractManagement.deploy
+│   ├── connection.tsx      # NeoLine + WalletConnect behind one hook
+│   ├── rpc.ts              # network defaults and the localStorage RPC override
+│   ├── verification.ts     # "Verified" badge: SHA-256 of deployed script vs bundled NEF
+│   ├── tranche-codec.ts    # Neo stack-item (de)serializer for stepped tranches
 │   ├── vesting-math.ts     # client-side mirror of contract schedule math
+│   ├── lock-form.ts        # create-lock form parsing and validation
+│   ├── data.ts             # display types, categories, schedule summaries
+│   ├── demo-data.ts        # canned dataset for /v/demo
+│   ├── format.ts           # number/date formatting helpers
 │   ├── utils.ts            # shadcn-style cn() helper
 │   └── known-deployments.ts
 ├── components/
@@ -86,11 +96,10 @@ src/
 
 ## Notes
 
-- Charts are **custom SVG** rather than Recharts (the project plan suggests
-  Recharts). The custom SVG matches the design pixel-for-pixel; swapping in
-  Recharts later is straightforward and isolated to `components/charts/`.
-- Wallet integration is stubbed. Wire up `@cityofzion/neon-dappkit` and
-  `@cityofzion/neon-js` in `lib/wallet.ts` (TODO) and the create-lock form
-  in `pages/Manage.tsx`.
-- Data is currently mocked in `lib/data.ts`. Replace with TanStack Query
-  hooks that read from Neo RPC via the contract manifest.
+- Charts are **custom SVG** rather than Recharts. Swapping in Recharts
+  later is straightforward and isolated to `components/charts/`.
+- Amounts come off the chain as exact `bigint` values (`amountRaw`,
+  `claimedRaw`, the `useVested` / `useClaimable` hooks). Use those for
+  anything displayed; the `number` twins exist for chart math only.
+- `npm run build` injects a Content-Security-Policy and emits `_headers`;
+  see `../docs/UI.md` before changing either.

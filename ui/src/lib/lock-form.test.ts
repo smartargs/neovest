@@ -133,3 +133,51 @@ describe('normalizeHashOrAddress', () => {
     expect(normalizeHashOrAddress('0x123')).toBeNull();
   });
 });
+
+describe('parseLockForm — on-chain byte limits', () => {
+  it('rejects a category that fits in 32 characters but not in 32 UTF-8 bytes', () => {
+    const res = parseLockForm(makeForm({ categoryInput: 'é'.repeat(20) }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/32 bytes/);
+  });
+
+  it('rejects a note over 256 UTF-8 bytes', () => {
+    const res = parseLockForm(makeForm({ noteInput: '✓'.repeat(100) }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/256 bytes/);
+  });
+
+  it('accepts a 32-byte ASCII category', () => {
+    expect(parseLockForm(makeForm({ categoryInput: 'a'.repeat(32) })).ok).toBe(true);
+  });
+});
+
+describe('parseLockForm — stepped schedules', () => {
+  it('returns the generated tranches alongside the blob', () => {
+    const res = expectOk(parseLockForm(makeForm({
+      scheduleType: 'stepped', amountInput: '10', stepsInput: '4',
+      startInput: '2999-01-01T00:00', endInput: '2999-04-01T00:00',
+    })));
+    expect(res.tranches).toHaveLength(4);
+    expect(res.trancheBlobBase64).toBeTruthy();
+    expect(res.tranches!.reduce((s, t) => s + t.amount, 0n)).toBe(10n);
+  });
+
+  it('rejects tranche counts the date range cannot keep strictly ascending', () => {
+    const res = parseLockForm(makeForm({
+      scheduleType: 'stepped', amountInput: '100', stepsInput: '64',
+      startInput: '2999-01-01T00:00', endInput: '2999-01-01T00:00:30',
+    }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/share a timestamp/);
+  });
+
+  it('rejects an amount too small to give every tranche a positive share', () => {
+    const res = parseLockForm(makeForm({
+      scheduleType: 'stepped', amountInput: '3', stepsInput: '4',
+      startInput: '2999-01-01T00:00', endInput: '2999-04-01T00:00',
+    }));
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/too small/);
+  });
+});

@@ -1,6 +1,9 @@
 import { wallet as neonWallet } from '@cityofzion/neon-js';
-import { generateEqualTranches, serializeTranchesToBase64 } from './tranche-codec';
+import { generateEqualTranches, serializeTranchesToBase64, type Tranche } from './tranche-codec';
 import type { ScheduleType } from './types';
+
+export const MAX_CATEGORY_BYTES = 32;
+export const MAX_NOTE_BYTES = 256;
 
 export interface RawLockForm {
   tokenInput: string;
@@ -29,15 +32,24 @@ export type ParsedLockForm =
       cliffSec: number | undefined;
       /** Base64-encoded `StdLib.serialize` blob for stepped schedules. */
       trancheBlobBase64?: string;
+      tranches?: Tranche[];
     }
   | { ok: false; error: string; tokenHash?: undefined; beneficiaryHash?: undefined };
+
+export function utf8ByteLength(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
 
 export function parseLockForm(f: RawLockForm): ParsedLockForm {
   if (!f.tokenInput.trim()) return { ok: false, error: 'Token contract hash required.' };
   if (!f.beneficiaryInput.trim()) return { ok: false, error: 'Beneficiary required.' };
   if (!f.amountInput.trim()) return { ok: false, error: 'Amount required.' };
-  if (f.categoryInput.length > 32) return { ok: false, error: 'Category must be 32 characters or less.' };
-  if (f.noteInput.length > 256) return { ok: false, error: 'Note must be 256 characters or less.' };
+  if (utf8ByteLength(f.categoryInput) > MAX_CATEGORY_BYTES) {
+    return { ok: false, error: `Category must be ${MAX_CATEGORY_BYTES} bytes or less in UTF-8.` };
+  }
+  if (utf8ByteLength(f.noteInput) > MAX_NOTE_BYTES) {
+    return { ok: false, error: `Note must be ${MAX_NOTE_BYTES} bytes or less in UTF-8.` };
+  }
 
   const tokenHash = normalizeHashOrAddress(f.tokenInput);
   if (!tokenHash) return { ok: false, error: 'Token must be a valid 0x… contract hash.' };
@@ -79,6 +91,14 @@ export function parseLockForm(f: RawLockForm): ParsedLockForm {
       return { ok: false, error: 'Last unlock must be after first when there is more than one tranche.' };
     }
     const tranches = generateEqualTranches(startSec, endSecS, steps, amountRaw);
+    for (let i = 1; i < tranches.length; i++) {
+      if (tranches[i].ts <= tranches[i - 1].ts) {
+        return { ok: false, error: 'Tranches would share a timestamp. Widen the date range or use fewer tranches.' };
+      }
+    }
+    if (tranches.some((t) => t.amount <= 0n)) {
+      return { ok: false, error: 'Amount is too small to split across that many tranches.' };
+    }
     const trancheBlobBase64 = serializeTranchesToBase64(tranches);
     return {
       ok: true,
@@ -89,10 +109,10 @@ export function parseLockForm(f: RawLockForm): ParsedLockForm {
       endSec: endSecS,
       cliffSec: undefined,
       trancheBlobBase64,
+      tranches,
     };
   }
 
-  // Linear
   if (startSec <= nowSec + 30) return { ok: false, error: 'Start date must be at least ~30s in the future.' };
   const endSec = parseLocalDatetime(f.endInput);
   if (!endSec) return { ok: false, error: 'Invalid end date.' };
@@ -127,7 +147,7 @@ export function parseAmount(s: string, decimals: number): bigint | null {
   const t = s.replace(/,/g, '').trim();
   if (!/^\d+(\.\d+)?$/.test(t)) return null;
   const [whole, frac = ''] = t.split('.');
-  if (frac.length > decimals) return null; // too many decimals
+  if (frac.length > decimals) return null;
   const fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
   return BigInt(whole) * (10n ** BigInt(decimals)) + BigInt(fracPadded);
 }

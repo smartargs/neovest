@@ -1,11 +1,62 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import path from 'node:path';
 
+// Content-Security-Policy for the production bundle. Injected as a <meta>
+// tag so it applies on any static host, and written to `_headers` for hosts
+// that read it (Cloudflare Pages, Netlify) together with the directives a
+// <meta> tag cannot carry. Scripts are limited to this origin plus browser
+// extensions, which is how NeoLine injects its dAPI; RPC endpoints are
+// user-configurable, so any https origin may be contacted; WalletConnect
+// needs its relay (wss) and verify/secure iframes.
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self' chrome-extension: moz-extension:",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "connect-src 'self' https: wss: http://localhost:* http://127.0.0.1:*",
+  "frame-src https://*.walletconnect.com https://*.walletconnect.org https://*.reown.com",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
+const STATIC_HEADERS = [
+  '/*',
+  `  Content-Security-Policy: ${CSP}; frame-ancestors 'none'`,
+  '  X-Frame-Options: DENY',
+  '  X-Content-Type-Options: nosniff',
+  '  Referrer-Policy: strict-origin-when-cross-origin',
+  '  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=()',
+  '',
+].join('\n');
+
+function securityHeaders(): Plugin {
+  return {
+    name: 'neovest-security-headers',
+    apply: 'build',
+    transformIndexHtml() {
+      return [
+        {
+          tag: 'meta',
+          attrs: { 'http-equiv': 'Content-Security-Policy', content: CSP },
+          injectTo: 'head-prepend',
+        },
+      ];
+    },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: '_headers', source: STATIC_HEADERS });
+    },
+  };
+}
+
 export default defineConfig({
   plugins: [
     react(),
+    securityHeaders(),
     // neon-js → ripemd160 → readable-stream needs the full Node stream/buffer
     // polyfill stack at runtime, not just the globals. Without `protocolImports`
     // and the explicit module list, readable-stream's `_stream_writable.js`

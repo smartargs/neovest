@@ -1,20 +1,54 @@
-import { defaultNetwork, resolveRpcUrl } from '@/lib/rpc';
+import { clearRpcOverride, defaultNetwork, getRpcOverride, resolveRpcUrl } from '@/lib/rpc';
 
-/**
- * Subtle top-of-page strip that surfaces non-mainnet networks. Hidden on
- * mainnet (no banner). Shown on testnet and localnet so it's impossible to
- * confuse a dev/test session with a production one.
- */
 export function NetworkBanner() {
   const net = defaultNetwork();
-  if (net === 'mainnet') return null;
+  const override = getRpcOverride();
+  return (
+    <>
+      {override && <RpcOverrideBanner url={override} />}
+      {net !== 'mainnet' && <NetworkStrip isLocal={net === 'localnet'} rpc={resolveRpcUrl()} />}
+    </>
+  );
+}
 
-  const rpc = resolveRpcUrl();
-  const isLocal = net === 'localnet';
+function RpcOverrideBanner({ url }: { url: string }) {
+  function reset() {
+    clearRpcOverride();
+    window.location.reload();
+  }
+  return (
+    <div
+      role="alert"
+      style={{
+        background: 'var(--danger-muted)',
+        color: 'var(--text-primary)',
+        padding: '10px 16px',
+        fontSize: 13,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        flexWrap: 'wrap',
+        borderBottom: '1px solid color-mix(in srgb, var(--danger) 40%, transparent)',
+      }}
+    >
+      <span>
+        <strong style={{ color: 'var(--danger)' }}>Custom RPC endpoint in use.</strong>{' '}
+        Everything on this site, including the bytecode verification badge, is reported by{' '}
+        <span className="mono" style={{ wordBreak: 'break-all' }}>{url}</span> instead of the default node.
+        Do not trust what you see here unless you set this endpoint yourself.
+      </span>
+      <button className="btn btn-secondary btn-sm" onClick={reset}>
+        Reset to default
+      </button>
+    </div>
+  );
+}
+
+function NetworkStrip({ isLocal, rpc }: { isLocal: boolean; rpc: string }) {
   const accent = isLocal ? 'var(--info)' : 'var(--warning)';
   const bg = isLocal ? 'var(--info-muted)' : 'var(--warning-muted)';
   const label = isLocal ? 'Localnet' : 'Testnet';
-
   return (
     <div
       role="status"

@@ -19,6 +19,18 @@ import {
   isDemoVault,
 } from './demo-data';
 
+function demoVested(lockId: number): bigint {
+  const l = DEMO_LOCKS.find((x) => x.id === lockId);
+  return l ? BigInt(vestedAt(l, DEMO_TODAY)) : 0n;
+}
+
+function demoClaimable(lockId: number): bigint {
+  const l = DEMO_LOCKS.find((x) => x.id === lockId);
+  if (!l) return 0n;
+  const claimable = demoVested(lockId) - l.claimedRaw;
+  return claimable > 0n ? claimable : 0n;
+}
+
 // ---------- Read hooks ----------
 
 export function useLockCount(contractHash: string) {
@@ -51,32 +63,24 @@ export function useAllLocks(contractHash: string) {
 }
 
 export function useVested(contractHash: string, lockId: number | undefined) {
-  return useQuery({
+  return useQuery<bigint>({
     queryKey: ['vested', contractHash, lockId],
     queryFn: () => {
-      if (lockId == null) return 0;
-      if (isDemoVault(contractHash)) {
-        const l = DEMO_LOCKS.find((x) => x.id === lockId);
-        return l ? vestedAt(l, DEMO_TODAY) : 0;
-      }
+      if (lockId == null) return 0n;
+      if (isDemoVault(contractHash)) return demoVested(lockId);
       return contract.vestedAmount(contractHash, lockId);
     },
     enabled: !!contractHash && lockId != null,
-    // Vesting advances with the chain clock — poll so it stays current.
     refetchInterval: 15_000,
   });
 }
 
 export function useClaimable(contractHash: string, lockId: number | undefined) {
-  return useQuery({
+  return useQuery<bigint>({
     queryKey: ['claimable', contractHash, lockId],
     queryFn: () => {
-      if (lockId == null) return 0;
-      if (isDemoVault(contractHash)) {
-        const l = DEMO_LOCKS.find((x) => x.id === lockId);
-        if (!l) return 0;
-        return Math.max(0, vestedAt(l, DEMO_TODAY) - (l.claimed ?? 0));
-      }
+      if (lockId == null) return 0n;
+      if (isDemoVault(contractHash)) return demoClaimable(lockId);
       return contract.claimableAmount(contractHash, lockId);
     },
     enabled: !!contractHash && lockId != null,
@@ -84,28 +88,23 @@ export function useClaimable(contractHash: string, lockId: number | undefined) {
   });
 }
 
-// Batch claimable for many locks; shares cache with useClaimable per lockId.
-export function useClaimableForLocks(contractHash: string, lockIds: number[]): Record<number, number | undefined> {
+export function useClaimableForLocks(contractHash: string, lockIds: number[]): Record<number, bigint | undefined> {
   const queries = useQueries({
     queries: lockIds.map((id) => ({
       queryKey: ['claimable', contractHash, id],
-      queryFn: () => {
-        if (isDemoVault(contractHash)) {
-          const l = DEMO_LOCKS.find((x) => x.id === id);
-          return l ? Math.max(0, vestedAt(l, DEMO_TODAY) - (l.claimed ?? 0)) : 0;
-        }
+      queryFn: (): Promise<bigint> | bigint => {
+        if (isDemoVault(contractHash)) return demoClaimable(id);
         return contract.claimableAmount(contractHash, id);
       },
       enabled: !!contractHash,
       refetchInterval: 15_000,
     })),
   });
-  const out: Record<number, number | undefined> = {};
-  lockIds.forEach((id, i) => { out[id] = queries[i].data as number | undefined; });
+  const out: Record<number, bigint | undefined> = {};
+  lockIds.forEach((id, i) => { out[id] = queries[i].data; });
   return out;
 }
 
-// Wall-clock that ticks, for cosmetic time-relative displays (countdowns, chart marker).
 export function useNow(intervalMs = 15_000): Date {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -121,16 +120,16 @@ export function useOwner(contractHash: string) {
     queryKey: ['owner', contractHash],
     queryFn: () => (isDemoVault(contractHash) ? DEMO_OWNER : contract.getOwner(contractHash)),
     enabled: !!contractHash,
-    staleTime: 60 * 60 * 1000, // owner is immutable
+    staleTime: 60 * 60 * 1000,
   });
 }
 
 export function useTotalLocked(contractHash: string, tokenHash: string | undefined) {
-  return useQuery({
+  return useQuery<bigint>({
     queryKey: ['totalLocked', contractHash, tokenHash],
     queryFn: () => {
-      if (!tokenHash) return 0;
-      if (isDemoVault(contractHash)) return DEMO_LOCKS.reduce((s, l) => s + l.amount, 0);
+      if (!tokenHash) return 0n;
+      if (isDemoVault(contractHash)) return DEMO_LOCKS.reduce((s, l) => s + l.amountRaw, 0n);
       return contract.totalLocked(contractHash, tokenHash);
     },
     enabled: !!contractHash && !!tokenHash,
@@ -157,12 +156,10 @@ export function useTokenInfo(tokenHash: string | undefined) {
     queryKey: ['tokenInfo', tokenHash],
     queryFn: () => {
       if (!tokenHash) return null;
-      // The demo token's hash is invented — short-circuit to its canned info.
       if (tokenHash.toLowerCase().endsWith('a6b7c812')) return DEMO_TOKEN;
       return contract.getTokenInfo(tokenHash);
     },
     enabled: !!tokenHash,
-    // Symbol/decimals are immutable; totalSupply changes rarely. Cache for 1h.
     staleTime: 60 * 60 * 1000,
   });
 }
@@ -217,11 +214,6 @@ export function useLocksByDepositor(contractHash: string, depositor: string | un
   });
 }
 
-/**
- * Roles the connected wallet has at a given vault: owner, depositor of any
- * lock, beneficiary of any lock, or none. Three RPC calls per vault — keep
- * the caller list short.
- */
 export interface VaultRoles {
   isOwner: boolean;
   isDepositor: boolean;

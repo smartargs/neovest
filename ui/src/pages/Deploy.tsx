@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { wallet as neonWallet } from '@cityofzion/neon-js';
 import { useConnection } from '@/lib/connection';
 import { defaultNetwork, type Network } from '@/lib/rpc';
 import {
@@ -30,12 +31,9 @@ const STEPS: { key: Stage; label: string }[] = [
 export function Deploy() {
   const conn = useConnection();
   const navigate = useNavigate();
-  const [params] = useSearchParams();
 
   const [stage, setStage] = useState<Stage>('configure');
-  // Pre-fill owner from `?owner=...` query param, or fall back to the connected
-  // wallet address. Empty until a wallet is connected.
-  const [ownerInput, setOwnerInput] = useState<string>(params.get('owner') ?? '');
+  const [ownerInput, setOwnerInput] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ txHash: string; contractHash: string } | null>(null);
 
@@ -45,7 +43,6 @@ export function Deploy() {
   useEffect(() => {
     if (autoFilled.current) return;
     if (ownerInput) {
-      // Already populated (e.g. via `?owner=` query param) — count as filled.
       autoFilled.current = true;
       return;
     }
@@ -71,6 +68,7 @@ export function Deploy() {
   }, [conn.address, manifestName]);
 
   const ownerValid = isValidNeoAddressOrHash(ownerInput);
+  const ownerIsDeployer = !!conn.address && ownerValid && sameAccount(ownerInput, conn.address);
   const network = defaultNetwork();
 
   async function handleDeploy() {
@@ -135,6 +133,7 @@ export function Deploy() {
         {artifactsOk && stage === 'review' && (
           <ReviewStage
             ownerInput={ownerInput}
+            ownerIsDeployer={ownerIsDeployer}
             deployerAddress={conn.address ?? ''}
             predictedHash={predictedHash}
             nefSize={nefSize}
@@ -301,6 +300,7 @@ function ConfigureStage({ conn, ownerInput, setOwnerInput, ownerValid, onNext }:
 
 interface ReviewProps {
   ownerInput: string;
+  ownerIsDeployer: boolean;
   deployerAddress: string;
   predictedHash: string | null;
   nefSize: number;
@@ -311,7 +311,7 @@ interface ReviewProps {
 }
 
 function ReviewStage({
-  ownerInput, deployerAddress, predictedHash, nefSize, manifestName, network, onBack, onConfirm,
+  ownerInput, ownerIsDeployer, deployerAddress, predictedHash, nefSize, manifestName, network, onBack, onConfirm,
 }: ReviewProps) {
   const [fee, setFee] = useState<DeployFee | null>(null);
   const [feeError, setFeeError] = useState<string | null>(null);
@@ -345,8 +345,8 @@ function ReviewStage({
       <div className="card-title">Review</div>
       <dl className="dl">
         <dt>Network</dt><dd>{network}</dd>
-        <dt>Deployer</dt><dd>{shortAddr(deployerAddress)}</dd>
-        <dt>Owner</dt><dd>{shortAddr(ownerInput)}</dd>
+        <dt>Deployer</dt><dd className="mono" style={{ wordBreak: 'break-all' }}>{deployerAddress}</dd>
+        <dt>Owner</dt><dd className="mono" style={{ wordBreak: 'break-all' }}>{ownerInput.trim()}</dd>
         <dt>Contract</dt><dd>{manifestName}</dd>
         <dt>NEF size</dt><dd>{fmtNum(nefSize)} bytes</dd>
         <dt>NEF checksum</dt><dd>0x{EXPECTED_NEF_CHECKSUM.toString(16)}</dd>
@@ -399,6 +399,23 @@ function ReviewStage({
           </div>
         );
       })()}
+
+      {!ownerIsDeployer && (
+        <div
+          style={{
+            padding: '10px 12px',
+            background: 'var(--danger-muted)',
+            color: 'var(--text-primary)',
+            borderRadius: 6,
+            fontSize: 12.5,
+          }}
+        >
+          <strong style={{ color: 'var(--danger)' }}>The owner is not the connected wallet.</strong>{' '}
+          Only the owner above can create locks or revoke in this vault. This wallet pays for the
+          deployment and will have no control over the vault afterwards. Check the owner address
+          character by character before signing.
+        </div>
+      )}
 
       <div
         style={{
@@ -521,16 +538,15 @@ function isValidNeoAddressOrHash(s: string): boolean {
 function addrToScriptHash(addrOrHash: string): string {
   const t = addrOrHash.trim();
   if (t.startsWith('0x')) return t.toLowerCase();
-  // Lazy import — avoids pulling neon-js into the page chunk before it's needed.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { wallet } = require('@cityofzion/neon-js');
-  return '0x' + wallet.getScriptHashFromAddress(t);
+  return '0x' + neonWallet.getScriptHashFromAddress(t);
 }
 
-function shortAddr(s: string): string {
-  if (!s) return '';
-  if (s.length <= 14) return s;
-  return s.slice(0, 6) + '…' + s.slice(-4);
+function sameAccount(a: string, b: string): boolean {
+  try {
+    return addrToScriptHash(a) === addrToScriptHash(b);
+  } catch {
+    return false;
+  }
 }
 
 function shortHash(s: string): string {

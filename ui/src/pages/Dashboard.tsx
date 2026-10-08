@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { addToHistory } from '@/lib/vault-history';
+import { toNeoAddress } from '@/lib/address';
 import {
   CATEGORIES,
   categoryColor,
@@ -62,11 +63,11 @@ export function Dashboard() {
     return { data: buildTimelineLocal(items, minStart, maxEnd, 130), minStart, maxEnd };
   }, [items, today]);
 
-  const totalLocked = items.reduce((s, l) => s + l.amount, 0);
-  const totalClaimed = items.reduce((s, l) => s + (l.claimed ?? 0), 0);
+  const totalLocked = items.reduce((s, l) => s + l.amountRaw, 0n);
+  const totalClaimed = items.reduce((s, l) => s + (l.claimedRaw ?? 0n), 0n);
   const remaining = totalLocked - totalClaimed;
   const uniqueBens = new Set(items.map((l) => l.ben)).size;
-  const largest = items.length === 0 ? null : items.reduce<Lock>((a, b) => (a.amount > b.amount ? a : b), items[0]);
+  const largest = items.length === 0 ? null : items.reduce<Lock>((a, b) => (a.amountRaw > b.amountRaw ? a : b), items[0]);
   const tokenList = items.map((l) => l.token).filter((t): t is string => !!t);
   const tokenSet = new Set(tokenList);
   const uniqueTokens = tokenSet.size;
@@ -82,8 +83,8 @@ export function Dashboard() {
   const { data: tokenInfo } = useTokenInfo(singleToken);
   const aggDecimals = tokenInfo?.decimals;
   const pctOfSupply =
-    tokenInfo && tokenInfo.totalSupply > 0
-      ? ((totalLocked / tokenInfo.totalSupply) * 100).toFixed(2)
+    tokenInfo && tokenInfo.totalSupply > 0n
+      ? (Number((totalLocked * 10_000n) / tokenInfo.totalSupply) / 100).toFixed(2)
       : null;
 
   // Every category that appears in any of this vault's locks — built-in or
@@ -99,10 +100,11 @@ export function Dashboard() {
   }, [items]);
 
   const byCat = presentCategories.map((id) => {
-    const total = items.filter((l) => l.cat === id).reduce((s, l) => s + l.amount, 0);
-    return { id, name: categoryName(id), value: total, color: categoryColor(id) };
-  }).filter((c) => c.value > 0);
+    const totalRaw = items.filter((l) => l.cat === id).reduce((s, l) => s + l.amountRaw, 0n);
+    return { id, name: categoryName(id), value: Number(totalRaw), valueRaw: totalRaw, color: categoryColor(id) };
+  }).filter((c) => c.valueRaw > 0n);
   const totalForCats = byCat.reduce((s, c) => s + c.value, 0);
+  const totalForCatsRaw = byCat.reduce((s, c) => s + c.valueRaw, 0n);
 
   const upcoming = useMemo<UpcomingBucket[]>(() => {
     // Show last 1 week + next 12 weeks so a cliff vested today/recently
@@ -142,6 +144,7 @@ export function Dashboard() {
     // Include events from the last 24h so a same-day cliff doesn't disappear.
     const cutoff = new Date(today.getTime() - 24 * 3600 * 1000);
     items.forEach((l) => {
+      if (l.revoked) return;
       if (l.type === 'cliff') {
         if (l.end > cutoff) events.push({ date: l.end, amount: l.amount, lock: l });
       } else if (l.type === 'linear') {
@@ -158,15 +161,8 @@ export function Dashboard() {
           if (v1 - v0 > 0) events.push({ date: nextMonth, amount: v1 - v0, lock: l });
         }
       } else if (l.type === 'stepped') {
-        const steps = l.steps ?? 4;
-        const stepDur = (l.end.getTime() - l.start.getTime()) / steps;
-        for (let i = 1; i <= steps; i++) {
-          const t = new Date(l.start.getTime() + i * stepDur);
-          if (t > today) {
-            events.push({ date: t, amount: l.amount / steps, lock: l });
-            break;
-          }
-        }
+        const next = (l.tranches ?? []).find((tr) => tr.ts > cutoff);
+        if (next) events.push({ date: next.ts, amount: next.amount, lock: l });
       }
     });
     events.sort((a, b) => a.date.getTime() - b.date.getTime());
@@ -184,7 +180,7 @@ export function Dashboard() {
     const q = search.trim().toLowerCase();
     return sortedLocks.filter((l) => {
       if (q) {
-        const hay = (l.ben + ' ' + l.label).toLowerCase();
+        const hay = (l.ben + ' ' + toNeoAddress(l.ben) + ' ' + l.label).toLowerCase();
         if (!hay.includes(q)) return false;
       }
       if (filterCat !== 'all' && l.cat !== filterCat) return false;
@@ -316,8 +312,8 @@ export function Dashboard() {
           value={items.length}
           sub={
             <span>
-              across <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{CATEGORIES.length}</span>{' '}
-              categories · {uniqueTokens || 1} token{uniqueTokens === 1 ? '' : 's'}
+              across <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{presentCategories.length}</span>{' '}
+              {presentCategories.length === 1 ? 'category' : 'categories'} · {uniqueTokens || 1} token{uniqueTokens === 1 ? '' : 's'}
             </span>
           }
         />
@@ -328,7 +324,7 @@ export function Dashboard() {
             <span>
               unique addresses{largest && ' · largest: '}
               <span className="mono" style={{ color: 'var(--text-primary)' }}>
-                {largest && fmtTokenAmount(largest.amount, decimalsFor(largest.token), { compact: true })}
+                {largest && fmtTokenAmount(largest.amountRaw, decimalsFor(largest.token), { compact: true })}
               </span>
             </span>
           }
@@ -361,7 +357,7 @@ export function Dashboard() {
 
         <div className="chart-legend">
           {presentCategories.map((id) => {
-            const total = items.filter((l) => l.cat === id).reduce((s, l) => s + l.amount, 0);
+            const total = items.filter((l) => l.cat === id).reduce((s, l) => s + l.amountRaw, 0n);
             return (
               <div
                 key={id}
@@ -402,7 +398,7 @@ export function Dashboard() {
                   Total locked
                 </div>
                 <div className="mono" style={{ fontSize: 18, fontWeight: 500, color: 'var(--text-primary)' }}>
-                  {fmtTokenAmount(totalForCats, aggDecimals, { compact: true })}
+                  {fmtTokenAmount(totalForCatsRaw, aggDecimals, { compact: true })}
                 </div>
               </div>
             </div>
@@ -411,7 +407,7 @@ export function Dashboard() {
                 <div key={c.id} className="row">
                   <span className="sw" style={{ background: c.color }} />
                   <span className="nm">{c.name}</span>
-                  <span className="am">{fmtTokenAmount(c.value, aggDecimals, { compact: true })}</span>
+                  <span className="am">{fmtTokenAmount(c.valueRaw, aggDecimals, { compact: true })}</span>
                   <span className="pc">{((c.value / totalForCats) * 100).toFixed(1)}%</span>
                 </div>
               ))}
@@ -520,7 +516,7 @@ export function Dashboard() {
                     </td>
                     <td className="num">
                       <div className="amount-cell" style={{ textAlign: 'right' }}>
-                        <span className="v">{fmtTokenAmount(l.amount, decimalsFor(l.token))}</span>
+                        <span className="v">{fmtTokenAmount(l.amountRaw, decimalsFor(l.token))}</span>
                       </div>
                     </td>
                     <td>
@@ -599,7 +595,7 @@ function VerificationBadge({ status }: { status: 'loading' | 'verified' | 'unver
     return (
       <span
         style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--success)' }}
-        title="Deployed bytecode checksum matches the audited source bundled with this UI."
+        title="SHA-256 of the deployed bytecode matches the audited source bundled with this UI."
       >
         <IconCheck size={12} /> Verified
       </span>

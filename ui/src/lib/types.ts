@@ -3,7 +3,7 @@
  *
  * The on-chain {@code Lock} struct (see {@code contract/.../Lock.java}) maps
  * to {@link Lock} below. Conversions live in {@code lib/contract.ts} (real
- * RPC reads) and {@code lib/data.ts} (mock data adapter).
+ * RPC reads) and {@code lib/demo-data.ts} (canned demo dataset).
  */
 
 import type { CategoryId } from './data';
@@ -19,10 +19,14 @@ export interface Lock {
   beneficiary: string;
   /** Hash160 of the NEP-17 token contract. */
   token: string;
-  /** Total tokens locked, in the token's smallest unit. */
+  /** Total tokens locked, in the token's smallest unit, as a JS number for chart math. */
   amount: number;
-  /** Tokens already claimed by the beneficiary. */
+  /** Exact total, in the token's smallest unit. Use this for anything displayed. */
+  amountRaw: bigint;
+  /** Tokens already claimed by the beneficiary, as a JS number for chart math. */
   claimed: number;
+  /** Exact claimed amount, in the token's smallest unit. */
+  claimedRaw: bigint;
   /** Schedule type. */
   type: ScheduleType;
   /** Vesting start. */
@@ -31,9 +35,7 @@ export interface Lock {
   end: Date;
   /** Optional cliff (linear schedules only). */
   cliff?: Date;
-  /** Number of equal tranches, for stepped schedules with uniform step size. */
-  steps?: number;
-  /** Tranche schedule (timestamps + amounts) for stepped schedules. */
+  /** Tranche schedule decoded from the on-chain blob (stepped schedules only). */
   tranches?: { ts: Date; amount: number }[];
   /** Free-form display category — `team`, `investor`, etc. */
   category: CategoryId | string;

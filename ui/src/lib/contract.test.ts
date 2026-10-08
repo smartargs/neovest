@@ -15,6 +15,7 @@ vi.mock('./rpc', () => ({
 }));
 
 import { u } from '@cityofzion/neon-js';
+import { serializeTranchesToBase64 } from './tranche-codec';
 import {
   claimableAmount,
   contractExists,
@@ -49,13 +50,15 @@ const TOKEN = hash160('0xcccccccccccccccccccccccccccccccccccccccc');
 
 /** Build the 16-field Array stack item the contract serializes a Lock as. */
 function lockArray(overrides: Partial<{
-  id: number; total: number; claimed: number; schedule: number;
+  id: number; total: number | string; claimed: number | string; schedule: number;
   start: number; end: number; cliff: number; created: number;
+  tranches: StackItemJson;
   category: string; note: string; revocable: boolean; revoked: boolean;
 }> = {}): StackItemJson {
   const o = {
     id: 7, total: 1_000_000, claimed: 250_000, schedule: 1,
     start: 1_700_000_000, end: 1_730_000_000, cliff: 1_705_000_000, created: 1_699_000_000,
+    tranches: any(),
     category: 'team', note: 'Q3 grant', revocable: true, revoked: false, ...overrides,
   };
   return {
@@ -71,7 +74,7 @@ function lockArray(overrides: Partial<{
       integer(o.start),         // 7  startTime
       integer(o.end),           // 8  endTime
       integer(o.cliff),         // 9  cliffTime
-      any(),                    // 10 tranches blob — not decoded here
+      o.tranches,               // 10 tranches blob (ByteString for stepped)
       str(o.category),          // 11 category
       str(o.note),              // 12 note
       integer(o.created),       // 13 createdAt
@@ -97,8 +100,8 @@ describe('scalar reads', () => {
 
   it('vestedAmount / claimableAmount pass the lockId and decode an Integer', async () => {
     invokeFunction.mockResolvedValue({ stack: [integer(333)] });
-    expect(await vestedAmount(HASH, 4)).toBe(333);
-    expect(await claimableAmount(HASH, 4)).toBe(333);
+    expect(await vestedAmount(HASH, 4)).toBe(333n);
+    expect(await claimableAmount(HASH, 4)).toBe(333n);
     // second positional arg is the [ContractParam] array
     expect(invokeFunction.mock.calls[0][2]).toHaveLength(1);
   });
@@ -137,7 +140,9 @@ describe('getLock — Array stack-item decoding', () => {
       beneficiary: BENEFICIARY.display,
       token: TOKEN.display,
       amount: 1_000_000,
+      amountRaw: 1_000_000n,
       claimed: 250_000,
+      claimedRaw: 250_000n,
       type: 'linear',
       category: 'team',
       note: 'Q3 grant',
@@ -164,6 +169,48 @@ describe('getLock — Array stack-item decoding', () => {
 
     invokeFunction.mockResolvedValue({ stack: [lockArray({ schedule: 2 })] });
     expect((await getLock(HASH, 2))!.type).toBe('stepped');
+  });
+
+  it('keeps exact raw amounts above 2^53 while the number view is approximate', async () => {
+    const big = '123456789012345678901';
+    invokeFunction.mockResolvedValue({ stack: [lockArray({ total: big, claimed: '1' })] });
+    const lock = await getLock(HASH, 1);
+    expect(lock!.amountRaw).toBe(123456789012345678901n);
+    expect(lock!.claimedRaw).toBe(1n);
+    expect(lock!.amount).toBeCloseTo(1.2345678901234568e20, 5);
+  });
+
+  it('decodes UTF-8 notes and categories', async () => {
+    invokeFunction.mockResolvedValue({ stack: [lockArray({ category: 'équipe', note: 'Q3 — grant ✓' })] });
+    const lock = await getLock(HASH, 1);
+    expect(lock!.category).toBe('équipe');
+    expect(lock!.note).toBe('Q3 — grant ✓');
+  });
+
+  it('decodes the stepped tranche blob into dated tranches', async () => {
+    const blob = serializeTranchesToBase64([
+      { ts: 1_700_000_000, amount: 400_000n },
+      { ts: 1_710_000_000, amount: 300_000n },
+      { ts: 1_730_000_000, amount: 300_000n },
+    ]);
+    invokeFunction.mockResolvedValue({
+      stack: [lockArray({ schedule: 2, tranches: { type: 'ByteString', value: blob } })],
+    });
+    const lock = await getLock(HASH, 1);
+    expect(lock!.type).toBe('stepped');
+    expect(lock!.tranches).toHaveLength(3);
+    expect(lock!.tranches![0].ts.getTime()).toBe(1_700_000_000 * 1000);
+    expect(lock!.tranches![1].amount).toBe(300_000);
+  });
+
+  it('leaves tranches undefined for non-stepped locks and for an undecodable blob', async () => {
+    invokeFunction.mockResolvedValue({ stack: [lockArray({ schedule: 1 })] });
+    expect((await getLock(HASH, 1))!.tranches).toBeUndefined();
+
+    invokeFunction.mockResolvedValue({
+      stack: [lockArray({ schedule: 2, tranches: { type: 'ByteString', value: 'AAEC' } })],
+    });
+    expect((await getLock(HASH, 1))!.tranches).toBeUndefined();
   });
 
   it('falls back to category "other" when the contract stored an empty string', async () => {
@@ -249,7 +296,7 @@ describe('getTokenInfo', () => {
       .mockResolvedValueOnce({ stack: [str('NEOV')] })   // symbol
       .mockResolvedValueOnce({ stack: [integer(8)] })    // decimals
       .mockResolvedValueOnce({ stack: [integer(21_000_000)] }); // totalSupply
-    expect(await getTokenInfo(TOKEN.display)).toEqual({ symbol: 'NEOV', decimals: 8, totalSupply: 21_000_000 });
+    expect(await getTokenInfo(TOKEN.display)).toEqual({ symbol: 'NEOV', decimals: 8, totalSupply: 21_000_000n });
   });
 
   it('returns null if any of the three calls faults', async () => {

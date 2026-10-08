@@ -1,10 +1,11 @@
 /**
- * Encoder for stepped-vesting tranche blobs.
+ * Codec for stepped-vesting tranche blobs.
  *
  * The on-chain `Lock.tranches` field is a `ByteString` produced by
  * {@code StdLib.serialize(Object[][])} on the contract side. Each element
  * is a 2-tuple `[timestampSec, amountRaw]` of integers. The contract calls
- * {@code StdLib.deserialize} when validating and computing vested amounts.
+ * {@code StdLib.deserialize} when validating and computing vested amounts;
+ * the UI decodes the same bytes to mirror that math.
  *
  * Neo's binary stack-item format (see neo-modules
  * `BinarySerializer.Serialize`):
@@ -16,14 +17,15 @@
  *
  * `varBytes` is `varInt(len) + bytes`. `varInt` follows Neo's standard
  * little-endian variable-length scheme (single byte for n < 0xfd, etc).
- *
- * For tranches: count ≤ 64 so the outer/inner array counts always fit in
- * one byte; integer payloads are usually 1–9 bytes (timestamps fit in 5,
- * amount-raw fits in 9 for 64-bit values).
  */
 
+const TYPE_ANY = 0x00;
+const TYPE_BOOLEAN = 0x20;
 const TYPE_INTEGER = 0x21;
+const TYPE_BYTESTRING = 0x28;
+const TYPE_BUFFER = 0x30;
 const TYPE_ARRAY = 0x40;
+const TYPE_STRUCT = 0x41;
 
 export interface Tranche {
   /** Unix seconds — when this tranche becomes claimable. */
@@ -32,14 +34,8 @@ export interface Tranche {
   amount: bigint;
 }
 
-/**
- * Serialize tranches to a base64 string suitable for the `ByteArray`
- * dappkit ContractParam value. Mirrors the Neo VM stack-item binary
- * format that {@code StdLib.deserialize} consumes.
- */
 export function serializeTranchesToBase64(tranches: Tranche[]): string {
   const out: number[] = [];
-  // Outer: Array<Array<Integer>>
   out.push(TYPE_ARRAY);
   writeVarInt(out, tranches.length);
   for (const t of tranches) {
@@ -49,6 +45,19 @@ export function serializeTranchesToBase64(tranches: Tranche[]): string {
     writeInteger(out, t.amount);
   }
   return bytesToBase64(out);
+}
+
+export function deserializeTranchesFromBase64(b64: string): Tranche[] {
+  const bytes = base64ToBytes(b64);
+  const reader = { pos: 0 };
+  const outer = readItem(bytes, reader);
+  if (!Array.isArray(outer)) throw new Error('tranches: expected an array');
+  return outer.map((pair) => {
+    if (!Array.isArray(pair) || pair.length < 2) throw new Error('tranches: expected [ts, amount] pairs');
+    const [ts, amount] = pair;
+    if (typeof ts !== 'bigint' || typeof amount !== 'bigint') throw new Error('tranches: expected integer pairs');
+    return { ts: Number(ts), amount };
+  });
 }
 
 /**
@@ -81,7 +90,54 @@ export function generateEqualTranches(
   return tranches;
 }
 
-// ---------- internal: varint + integer encoding ----------
+type StackValue = bigint | null | StackValue[];
+
+function readItem(bytes: Uint8Array, r: { pos: number }): StackValue {
+  if (r.pos >= bytes.length) throw new Error('tranches: truncated');
+  const type = bytes[r.pos++];
+  switch (type) {
+    case TYPE_ANY:
+      return null;
+    case TYPE_BOOLEAN:
+      return BigInt(readByte(bytes, r));
+    case TYPE_INTEGER:
+    case TYPE_BYTESTRING:
+    case TYPE_BUFFER: {
+      const len = readVarInt(bytes, r);
+      if (r.pos + len > bytes.length) throw new Error('tranches: truncated');
+      const value = signedLEToBigint(bytes.subarray(r.pos, r.pos + len));
+      r.pos += len;
+      return value;
+    }
+    case TYPE_ARRAY:
+    case TYPE_STRUCT: {
+      const count = readVarInt(bytes, r);
+      const items: StackValue[] = [];
+      for (let i = 0; i < count; i++) items.push(readItem(bytes, r));
+      return items;
+    }
+    default:
+      throw new Error(`tranches: unsupported stack item type 0x${type.toString(16)}`);
+  }
+}
+
+function readByte(bytes: Uint8Array, r: { pos: number }): number {
+  if (r.pos >= bytes.length) throw new Error('tranches: truncated');
+  return bytes[r.pos++];
+}
+
+function readVarInt(bytes: Uint8Array, r: { pos: number }): number {
+  const first = readByte(bytes, r);
+  if (first < 0xfd) return first;
+  if (first === 0xfd) {
+    return readByte(bytes, r) | (readByte(bytes, r) << 8);
+  }
+  if (first === 0xfe) {
+    const low = readByte(bytes, r) | (readByte(bytes, r) << 8) | (readByte(bytes, r) << 16);
+    return low + readByte(bytes, r) * 0x1000000;
+  }
+  throw new Error('tranches: varint too large');
+}
 
 function writeVarInt(out: number[], n: number): void {
   if (n < 0) throw new Error('varint must be non-negative');
@@ -97,10 +153,6 @@ function writeVarInt(out: number[], n: number): void {
   }
 }
 
-/**
- * Write an Integer stack item: type byte, varInt length, signed
- * little-endian bytes. Matches Neo's BigInteger ToByteArray() output.
- */
 function writeInteger(out: number[], value: bigint): void {
   out.push(TYPE_INTEGER);
   const bytes = bigintToSignedLE(value);
@@ -127,7 +179,6 @@ function bigintToSignedLE(value: bigint): number[] {
     abs >>= 8n;
   }
   if (negative) {
-    // two's complement: invert + 1
     let carry = 1;
     for (let i = 0; i < bytes.length; i++) {
       const v = (bytes[i] ^ 0xff) + carry;
@@ -141,8 +192,23 @@ function bigintToSignedLE(value: bigint): number[] {
   return bytes;
 }
 
+function signedLEToBigint(bytes: Uint8Array): bigint {
+  if (bytes.length === 0) return 0n;
+  let v = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) v = (v << 8n) | BigInt(bytes[i]);
+  if (bytes[bytes.length - 1] & 0x80) v -= 1n << BigInt(8 * bytes.length);
+  return v;
+}
+
 function bytesToBase64(bytes: number[]): string {
   let bin = '';
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin);
+}
+
+export function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }

@@ -2,6 +2,7 @@ package com.smartargs.vesting;
 
 import com.smartargs.vesting.helpers.LyingNep17Token;
 import com.smartargs.vesting.helpers.ReentrantNep17Token;
+import com.smartargs.vesting.helpers.SpoofingNep17Token;
 import com.smartargs.vesting.helpers.TestNep17Token;
 import io.neow3j.contract.NeoToken;
 import io.neow3j.contract.SmartContract;
@@ -15,6 +16,7 @@ import io.neow3j.test.DeployConfig;
 import io.neow3j.test.DeployConfiguration;
 import io.neow3j.test.DeployContext;
 import io.neow3j.transaction.AccountSigner;
+import io.neow3j.transaction.Signer;
 import io.neow3j.types.ContractParameter;
 import io.neow3j.types.Hash160;
 import io.neow3j.types.Hash256;
@@ -69,6 +71,11 @@ import static org.assertj.core.api.Assertions.assertThat;
  * created with those test tokens — the vault accepts any NEP-17 from the
  * owner, so we don't need separate vault deployments to reach them.
  *
+ * <p>Deposits are signed with a {@code CustomContracts} scope naming the token
+ * and the vault: the vault checks the owner's witness from inside the token's
+ * callback, which {@code CalledByEntry} does not reach. See
+ * {@link #depositSigner}.
+ *
  * <p>The only abort site without a test is {@code "VV: no calling token"} —
  * it's only reachable if {@code Runtime.getCallingScriptHash()} returns
  * null, which can't happen inside a real NEP-17 callback flow. Kept as
@@ -78,6 +85,7 @@ import static org.assertj.core.api.Assertions.assertThat;
         TestNep17Token.class,
         LyingNep17Token.class,
         ReentrantNep17Token.class,
+        SpoofingNep17Token.class,
         VestingVault.class
 })
 public class VestingVaultTest {
@@ -107,6 +115,8 @@ public class VestingVaultTest {
     private static SmartContract lyingToken;
     /** Re-entrant NEP-17: when the vault calls transfer, it re-enters vault.claim. */
     private static SmartContract reentrantToken;
+    /** Fake NEP-17 that calls the vault's onNEP17Payment directly without moving tokens. */
+    private static SmartContract spoofingToken;
     private static Account beneficiary;
     /** Third party — not depositor, not beneficiary. Used to test access control. */
     private static Account stranger;
@@ -128,6 +138,7 @@ public class VestingVaultTest {
         token          = ext.getDeployedContract(TestNep17Token.class);
         lyingToken     = ext.getDeployedContract(LyingNep17Token.class);
         reentrantToken = ext.getDeployedContract(ReentrantNep17Token.class);
+        spoofingToken  = ext.getDeployedContract(SpoofingNep17Token.class);
         vault          = ext.getDeployedContract(VestingVault.class);
 
         // depositor is class-level (and is the vault owner).
@@ -307,7 +318,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(BigInteger.valueOf(1_000_000L)),
                         any(null))
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, token.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         assertAborted(tx, "VV: no data", neow3j);
     }
@@ -321,7 +332,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(BigInteger.valueOf(1_000_000L)),
                         shortData)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, token.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         assertAborted(tx, "VV: bad data length", neow3j);
     }
@@ -589,9 +600,54 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(BigInteger.valueOf(1_000_000_00L)),
                         data)
-                .signers(AccountSigner.calledByEntry(stranger))
+                .signers(depositSigner(stranger, token.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         assertAborted(tx, "VV: not owner", neow3j);
+    }
+
+    /**
+     * A contract posing as a token calls {@code onNEP17Payment} directly with
+     * {@code from = owner}. The owner never signed, so the vault must refuse
+     * to record the lock even though the caller reports {@code transfer}
+     * success and the symbol matches a real token.
+     */
+    @Test
+    void payment_directCallSpoofingOwner_aborts() throws Throwable {
+        BigInteger countBefore = lockCount();
+        ContractParameter data = lockData(stranger.getScriptHash(), 0,
+                futureTime(60), futureTime(60), 0L, null,
+                "team", "spoofed deposit", false);
+        Hash256 tx = spoofingToken.invokeFunction("spoofDeposit",
+                        hash160(vault.getScriptHash()),
+                        hash160(depositor.getScriptHash()),
+                        integer(new BigInteger("100000000000000000")),
+                        data)
+                .signers(AccountSigner.global(stranger))
+                .sign().send().getSendRawTransaction().getHash();
+        assertAborted(tx, "VV: no owner witness", neow3j);
+        assertThat(lockCount()).isEqualTo(countBefore);
+    }
+
+    /**
+     * The owner's witness must reach the vault's own context. A plain
+     * {@code CalledByEntry} signature covers the token (called by the entry
+     * script) but not the vault (called by the token), so a deposit signed
+     * that way aborts. The UI signs with {@code CustomContracts} for this
+     * reason.
+     */
+    @Test
+    void payment_ownerSignedCalledByEntryOnly_aborts() throws Throwable {
+        BigInteger countBefore = lockCount();
+        ContractParameter data = defaultLockData(0, futureTime(60), futureTime(60), 0L, null);
+        Hash256 tx = token.invokeFunction("transfer",
+                        hash160(depositor.getScriptHash()),
+                        hash160(vault.getScriptHash()),
+                        integer(BigInteger.valueOf(1_000_000L)),
+                        data)
+                .signers(AccountSigner.calledByEntry(depositor))
+                .sign().send().getSendRawTransaction().getHash();
+        assertAborted(tx, "VV: no owner witness", neow3j);
+        assertThat(lockCount()).isEqualTo(countBefore);
     }
 
     /**
@@ -612,7 +668,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(amount),
                         data)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, lyingToken.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(depTx, neow3j);
         int lockId = lockCount().intValue();
@@ -643,7 +699,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(amount),
                         data)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, lyingToken.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(depTx, neow3j);
         int lockId = lockCount().intValue();
@@ -674,7 +730,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(amount),
                         data)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, reentrantToken.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(depTx, neow3j);
         int lockId = lockCount().intValue();
@@ -1131,7 +1187,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(lyingAmt),
                         lyingData)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, lyingToken.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(lyingTx, neow3j);
 
@@ -1144,7 +1200,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(reentrantAmt),
                         reentrantData)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, reentrantToken.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(reentrantTx, neow3j);
 
@@ -1583,6 +1639,15 @@ public class VestingVaultTest {
         Await.waitUntilTransactionIsExecuted(tx, neow3j);
     }
 
+    /**
+     * Signer for a deposit: {@code CustomContracts} scope listing the token
+     * (which checks the witness in {@code transfer}) and the vault (which
+     * checks it again inside {@code onNEP17Payment}).
+     */
+    private static Signer depositSigner(Account from, Hash160 tokenHash) {
+        return AccountSigner.none(from).setAllowedContracts(tokenHash, vault.getScriptHash());
+    }
+
     /** Submit a deposit (NEP-17 transfer with vault as receiver). */
     private Hash256 transferToVault(BigInteger amount, ContractParameter data) throws Throwable {
         return token.invokeFunction("transfer",
@@ -1590,7 +1655,7 @@ public class VestingVaultTest {
                         hash160(vault.getScriptHash()),
                         integer(amount),
                         data)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, token.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
     }
 
@@ -1647,7 +1712,7 @@ public class VestingVaultTest {
         Hash256 depositTx = neo.invokeFunction("transfer",
                         hash160(depositor.getScriptHash()), hash160(vault.getScriptHash()),
                         integer(BigInteger.valueOf(100)), data)
-                .signers(AccountSigner.calledByEntry(depositor))
+                .signers(depositSigner(depositor, neo.getScriptHash()))
                 .sign().send().getSendRawTransaction().getHash();
         Await.waitUntilTransactionIsExecuted(depositTx, neow3j);
         int lockId = lockCount().intValue();

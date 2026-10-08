@@ -11,33 +11,50 @@
  * so the adapter doesn't need to implement those.
  */
 
-import type { ContractInvocationMulti, Arg } from '@cityofzion/neon-dappkit-types';
+import type { ContractInvocationMulti, Arg, Signer } from '@cityofzion/neon-dappkit-types';
 import { wallet as neonWallet } from '@cityofzion/neon-js';
 import type { NeoLineN3, NeoLineArg, NeoLineSigner } from './neoline-types';
 
-/** N-address → 0x-hex scripthash. Pass-through for already-hex inputs. */
+const SCOPE_CODES: Record<string, number> = {
+  None: 0,
+  CalledByEntry: 1,
+  CustomContracts: 16,
+  CustomGroups: 32,
+  WitnessRules: 64,
+  Global: 128,
+};
+
 function toScriptHash(addrOrHash: string): string {
   const t = addrOrHash.trim();
   if (t.startsWith('0x') && t.length === 42) return t.toLowerCase();
   return '0x' + neonWallet.getScriptHashFromAddress(t);
 }
 
-/**
- * Resolve the dAPI client. The extension injects {@code window.NEOLineN3}
- * asynchronously after page load, so we either grab it immediately if it's
- * already there or wait for the {@code NEOLine.N3.EVENT.READY} event.
- *
- * {@code NEOLineN3.Init} is a class constructor (per
- * https://neoline.io/dapi/N3.html) — call it with {@code new}, then use the
- * instance's promise-returning methods.
- */
+function toNeoLineScope(scopes: number | string | undefined): number {
+  if (typeof scopes === 'number') return scopes;
+  if (!scopes) return SCOPE_CODES.CalledByEntry;
+  return scopes.split(',').reduce((acc, part) => {
+    const code = SCOPE_CODES[part.trim()];
+    if (code == null) throw new Error(`Unknown witness scope: ${part}`);
+    return acc | code;
+  }, 0);
+}
+
+function toNeoLineSigner(signer: Signer, fallbackAccount: string): NeoLineSigner {
+  const out: NeoLineSigner = {
+    account: toScriptHash(signer.account ?? fallbackAccount),
+    scopes: toNeoLineScope(signer.scopes),
+  };
+  if (signer.allowedContracts) out.allowedContracts = signer.allowedContracts.map(toScriptHash);
+  if (signer.allowedGroups) out.allowedGroups = signer.allowedGroups;
+  return out;
+}
+
 function getNeoLine(timeoutMs = 3000): Promise<NeoLineN3> {
   if (typeof window === 'undefined') return Promise.reject(new Error('NeoLine: no window'));
 
-  // Fast path: already injected.
   if (window.NEOLineN3) return Promise.resolve(new window.NEOLineN3.Init());
 
-  // Slow path: wait for the READY event with a timeout fallback.
   return new Promise<NeoLineN3>((resolve, reject) => {
     const onReady = () => {
       window.removeEventListener('NEOLine.N3.EVENT.READY', onReady);
@@ -56,32 +73,18 @@ function getNeoLine(timeoutMs = 3000): Promise<NeoLineN3> {
   });
 }
 
-/** Convert our standard ContractInvocationMulti `Arg` into NeoLine's wire shape. */
 function argToNeoLine(a: Arg): NeoLineArg {
-  // The shapes are nearly identical — neon-dappkit's `Arg` adds a couple of
-  // types NeoLine doesn't list, but for the ones we use (Hash160, Integer,
-  // String, ByteArray, Boolean, Array, Any) the value is already compatible.
   return a as unknown as NeoLineArg;
 }
 
 export interface NeoLineProviderShape {
-  /** Connected N-prefixed Neo3 address. */
   readonly address: string;
   readonly publicKey: string;
   readonly network: string;
-  /** Sign + send. Returns the tx hash. */
   invokeFunction(req: ContractInvocationMulti): Promise<string>;
-  /** Sign a message (used by some auth flows; not used by the vault today). */
   signMessage(req: { message: string }): Promise<{ publicKey: string; data: string; salt: string; message: string }>;
 }
 
-/**
- * Build a connected provider. Throws if the extension is missing.
- *
- * Caller should wire `NEOLine.N3.EVENT.{ACCOUNT,NETWORK}_CHANGED` and
- * `DISCONNECTED` listeners and drop the provider when any fire — the
- * connected address is baked into this object.
- */
 export async function buildNeoLineProvider(): Promise<NeoLineProviderShape> {
   const cli = await getNeoLine();
   const acct = await cli.getAccount();
@@ -93,14 +96,7 @@ export async function buildNeoLineProvider(): Promise<NeoLineProviderShape> {
     network: nets.defaultNetwork,
 
     async invokeFunction(req: ContractInvocationMulti): Promise<string> {
-      // ContractInvocationMulti is a list of invocations + a list of signers.
-      // NeoLine has separate methods for single vs multiple invocations.
-      // signer.account must be a 0x-hex scripthash — NeoLine's internal
-      // neon-js call hits `Expected a hexstring` if you pass an N-address.
-      const signers: NeoLineSigner[] = (req.signers ?? []).map((s) => ({
-        account: toScriptHash((s as { account?: string }).account ?? acct.address),
-        scopes: (s as { scopes?: number | string }).scopes ?? 'CalledByEntry',
-      }));
+      const signers = (req.signers ?? []).map((s) => toNeoLineSigner(s, acct.address));
 
       if (req.invocations.length === 1) {
         const inv = req.invocations[0];
@@ -131,7 +127,6 @@ export async function buildNeoLineProvider(): Promise<NeoLineProviderShape> {
   };
 }
 
-/** Quick check the extension is even present (without forcing a connection). */
 export function isNeoLineAvailable(): boolean {
   return typeof window !== 'undefined' && !!window.NEOLineN3;
 }

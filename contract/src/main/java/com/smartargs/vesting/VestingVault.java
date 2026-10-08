@@ -59,7 +59,20 @@ import io.neow3j.devpack.events.Event8Args;
  *       vested.</li>
  *   <li>The serialized tranche blob is cleared on cliff/linear locks; it is
  *       only stored for stepped schedules that actually read it.</li>
+ *   <li>{@code onPayment} requires a witness for {@code from}. The NEP-17
+ *       callback only tells the vault which contract called it, not whether
+ *       that contract really moved tokens, so without the witness any
+ *       contract could call {@code onNEP17Payment} directly and create a
+ *       lock attributed to the owner. The deposit transaction must therefore
+ *       be signed with a {@code CustomContracts} scope that lists both the
+ *       token and the vault; {@code CalledByEntry} alone does not reach the
+ *       vault's context. This also means the owner has to be a signing
+ *       account (single- or multi-sig), not a contract.</li>
  * </ul>
+ *
+ * <p>Known limitation: GAS that the NEO contract distributes to this vault
+ * for NEO it holds, and tokens minted straight to the vault, have no
+ * withdrawal path and stay in the contract. See {@code docs/SECURITY.md}.
  */
 @DisplayName("VestingVault")
 @ManifestExtra(key = "Author", value = "smartargs")
@@ -129,7 +142,8 @@ public class VestingVault {
     /**
      * NEP-17 push callback. The transferred tokens are taken as a deposit
      * and {@code data} is decoded as lock parameters. Aborts unless
-     * {@code from} equals the vault's owner.
+     * {@code from} equals the vault's owner and the owner witnessed this
+     * invocation.
      *
      * <p>Expected {@code data} shape (Object[9]):
      * {@code [beneficiary, scheduleType, startTime, endTime, cliffTime,
@@ -139,13 +153,14 @@ public class VestingVault {
     public static void onPayment(Hash160 from, int amount, Object data) {
         // GAS accrued from holding NEO is distributed to this contract with a
         // null `from`; accept it rather than aborting, so NEO can be sent back
-        // out (claim/revoke) without faulting.
+        // out (claim/revoke) without faulting. That GAS is not withdrawable.
         if (from == null) return;
         requireValidPayment(from, amount, data);
 
         Hash160 owner = getOwner();
         if (owner == null) Helper.abort("VV: not initialized");
         if (!from.equals(owner)) Helper.abort("VV: not owner");
+        if (!Runtime.checkWitness(from)) Helper.abort("VV: no owner witness");
 
         Hash160 token = Runtime.getCallingScriptHash();
         if (token == null) Helper.abort("VV: no calling token");

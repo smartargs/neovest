@@ -49,11 +49,13 @@ const SCHED_CODE: Record<ScheduleType, number> = { cliff: 0, linear: 1, stepped:
 /**
  * createLock = NEP-17 transfer to the vault with the lock parameters encoded
  * in the {@code data} payload. Single transaction.
+ *
+ * The vault verifies the owner's witness from inside the token's
+ * {@code onNEP17Payment} callback, which a {@code CalledByEntry} signature
+ * does not reach. The signer therefore uses the {@code CustomContracts}
+ * scope naming exactly the token and the vault.
  */
 export async function createLock(provider: UnifiedProvider, a: CreateLockArgs): Promise<string> {
-  // Position 5 is the stepped-schedule tranche blob (base64-encoded
-  // StdLib.serialize output). For cliff/linear it's unused — pass an empty
-  // ByteArray. NeoLine doesn't support the `Any` ContractParam type.
   const trancheArg: Arg =
     a.scheduleType === 'stepped' && a.trancheBlobBase64
       ? { type: 'ByteArray', value: a.trancheBlobBase64 }
@@ -71,20 +73,29 @@ export async function createLock(provider: UnifiedProvider, a: CreateLockArgs): 
     { type: 'Boolean', value: a.revocable },
   ];
 
+  const tokenHash = toHash160(a.tokenHash);
+  const vaultHash = toHash160(a.vaultHash);
+
   const payload: ContractInvocationMulti = {
     invocations: [
       {
-        scriptHash: a.tokenHash,
+        scriptHash: tokenHash,
         operation: 'transfer',
         args: [
           { type: 'Hash160', value: toHash160(a.fromAddress) },
-          { type: 'Hash160', value: toHash160(a.vaultHash) },
+          { type: 'Hash160', value: vaultHash },
           { type: 'Integer', value: a.amount.toString() },
           { type: 'Array', value: dataArr },
         ],
       },
     ],
-    signers: [{ account: a.fromAddress, scopes: 'CalledByEntry' }],
+    signers: [
+      {
+        account: a.fromAddress,
+        scopes: 'CustomContracts',
+        allowedContracts: [tokenHash, vaultHash],
+      },
+    ],
   };
 
   const result = await provider.invokeFunction(payload);
@@ -122,20 +133,14 @@ export async function revoke(provider: UnifiedProvider, vaultHash: string, fromA
 /**
  * Wait for a transaction to be included and assert it didn't FAULT. Returns
  * the application log on success; throws with the VM exception on failure.
- *
- * Uses {@link resolveRpcUrl} to pick the RPC, so the listener follows the
- * same network resolution as every other read in this app — including the
- * local-net override via {@code VITE_RPC_URL}.
  */
 export async function waitForTx(txHash: string) {
   const listener = new NeonEventListener(resolveRpcUrl());
   const log = await listener.waitForApplicationLog(txHash);
-  // Throws on FAULT; safe to call even on HALT (no-op).
   listener.confirmTransaction(log);
   return log;
 }
 
-/** Some adapters return a string txid, others { hash } — normalize. */
 function resolveTxHash(result: unknown): string {
   if (typeof result === 'string') return result;
   if (result && typeof result === 'object' && 'hash' in result) {

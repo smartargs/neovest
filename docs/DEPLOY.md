@@ -14,15 +14,19 @@ deployments.
    wallet such as Neon, OneGate, or NeoLine Mobile).
 4. Enter the **owner address**: the address that will be authorized to
    create new locks against this vault. Defaults to the connected wallet.
-5. Review the cost estimate, predicted contract hash, and bundled NEF
-   checksum. Sign the transaction.
+   It must be an account that can sign (single-sig or multi-sig), not a
+   smart contract; see `SECURITY.md`.
+5. Review the cost estimate, the predicted contract hash, and the full
+   owner address. If the owner is not the connected wallet the page says
+   so in red; that wallet pays for the deploy and gets no control over the
+   vault. Sign the transaction.
 6. After confirmation the dashboard reads the actual contract hash from
    the transaction's application log and routes you to the new vault.
 
 The browser path bundles the audited NEF + manifest into the build, so
 the contract you deploy is byte-identical to the source committed in the
-repository at the time the UI was built. The bytecode checksum is
-verifiable via the `VERIFY.md` procedure.
+repository at the time the UI was built. The bytecode is verifiable via
+the `VERIFY.md` procedure.
 
 ## Path B — from the command line
 
@@ -66,7 +70,7 @@ needs it to open the vault.
 ```bash
 export NEO_RPC=https://mainnet1.neo.coz.io:443      # or your testnet RPC
 export DEPLOYER_WIF=<wif-of-funded-account>
-export VAULT_OWNER=<N-prefixed-address-or-0x-scripthash>   # optional; defaults to deployer
+export VAULT_OWNER=<N-prefixed-address-or-0x-scripthash>   # optional; defaults to deployer; must be a signing account
 ./gradlew :deploy:run -PmainClass=com.smartargs.vesting.deploy.Deploy
 ```
 

@@ -184,6 +184,13 @@ navigate directly to `http://localhost:5173/v/<contract-hash>`.
 
 Hit **Create lock**. The wallet signs a `transfer(token, vault, amount,
 data)` tx that lands the funds in the vault and creates the lock atomically.
+NeoLine shows the signature scope as *custom contracts* listing the token
+and the vault; that is expected (the vault checks the owner's witness
+inside the token's callback) and the list should contain exactly those two
+hashes.
+
+If you vest NEO itself rather than GAS, the form warns that GAS earned by
+NEO sitting in the vault cannot be withdrawn by anyone.
 
 ### Claim
 
@@ -208,6 +215,10 @@ already vested.
 - **`"VV: not owner"` on deposit**: the vault was deployed with a different
   owner than the wallet you're depositing from. Re-deploy with the correct
   `VAULT_OWNER`, or switch wallets.
+- **`"VV: no owner witness"` on deposit**: the transfer was signed with a
+  `CalledByEntry` scope only. Deposits need `CustomContracts` naming the
+  token and the vault; the dashboard does this, hand-built transactions
+  must too.
 - **Tx faults with `"VV: cliff in past"`**: clock skew between your laptop
   and the chain. Pick a start date 1–2 minutes in the future.
 - **Bundle says checksum mismatch / "Bytecode mismatch" on the dashboard**:

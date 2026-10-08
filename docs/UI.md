@@ -69,7 +69,29 @@ gateway compatibility.
   `ui/src/lib/known-deployments.ts` and submit a PR; the landing page
   surfaces these.
 - **Network.** The default RPC URL is configured per network in
-  `ui/src/lib/rpc.ts`. Override at runtime via the `?rpc=` query parameter.
+  `ui/src/lib/rpc.ts` and selected at build time through `VITE_NETWORK`
+  and `VITE_RPC_URL`. For debugging against another node, set the
+  `neovest.rpc` key in the browser's localStorage to the URL and reload;
+  a red banner then names the endpoint on every page until you reset it.
+  There is intentionally no URL parameter for this, because every figure
+  on the page (including the bytecode verification badge) comes from that
+  endpoint and a shareable link must not be able to change it.
+
+## Security headers
+
+`npm run build` injects a Content-Security-Policy `<meta>` tag into
+`index.html` and emits `dist/_headers` with the same policy plus
+`frame-ancestors 'none'`, `X-Frame-Options`, `X-Content-Type-Options`,
+`Referrer-Policy` and `Permissions-Policy`. Cloudflare Pages and Netlify
+read `_headers` as-is; on other hosts, set equivalent headers in the server
+config. The policy lives in `ui/vite.config.ts`.
+
+The policy allows scripts from the page's origin and from browser
+extensions (NeoLine injects its dAPI that way), connections to any `https:`
+or `wss:` endpoint (RPC nodes are user-configurable and WalletConnect uses a
+relay), and iframes only from WalletConnect/Reown domains. After changing
+it, smoke-test a NeoLine connection and a WalletConnect connection on the
+built bundle; the e2e suite only covers the read-only flows.
 
 ## Submitting a deployment
 

@@ -11,7 +11,31 @@ evolving.
 
 ## [Unreleased]
 
+### Security
+
+- **Contract:** `onPayment` now requires the owner's witness
+  (`Runtime.checkWitness(from)`). Previously any contract could call
+  `onNEP17Payment` directly, claim the owner had deposited, and create a
+  lock for a token that never moved. Deposits must be signed with the
+  `CustomContracts` scope naming the token and the vault; the dashboard
+  does this automatically. The owner must be a signing account, not a
+  contract. Two tests cover the spoofed-deposit and wrong-scope cases.
+- **UI:** the `?rpc=` URL parameter is gone. A link could point the
+  dashboard at an attacker's node and have every trust signal, including
+  the Verified badge and the owner check, reported by that node. The
+  localStorage override remains for debugging and now shows a red banner
+  with a reset button on every page while active.
+- **UI:** the production build ships a Content-Security-Policy and emits a
+  `_headers` file with frame-ancestors, nosniff, referrer and permissions
+  policies.
+
 ### Added
+
+- Warning on the create-lock form when the token is NEO: GAS earned by NEO
+  held in the vault cannot be withdrawn.
+- Lock detail lists the individual tranches of a stepped schedule.
+- Owner-mismatch warning on the Deploy review step, with the full owner
+  and deployer addresses shown instead of truncated ones.
 
 - Browser-based deployment: connect a wallet, click Deploy, sign one
   transaction. Cost is estimated via RPC; the future contract hash is
@@ -52,6 +76,26 @@ evolving.
 
 ### Fixed
 
+- Dashboard vesting figures for stepped locks are computed from the
+  on-chain tranche list instead of assuming four equal steps, and revoked
+  locks are shown frozen at their reduced total instead of continuing to
+  vest in charts and tables.
+- Amounts are carried as exact integers end to end; totals above 2^53 raw
+  units no longer lose digits in the display.
+- The predicted contract hash on the Deploy review step rendered as a dash
+  for every N-address wallet because of a CommonJS `require` left in the
+  browser bundle.
+- Notes and categories are decoded as UTF-8, and the create-lock form
+  validates their on-chain byte limits instead of character counts.
+- The create-lock form rejects tranche counts the date range cannot keep
+  strictly ascending, which previously surfaced as an opaque on-chain
+  fault.
+- "Show all locks" on the depositor tab now works; depositor cards show the
+  creation date instead of the start date; the positions stat counts the
+  categories actually present; the Verified tooltip describes the SHA-256
+  check it performs.
+- Lock enumeration fetches with bounded concurrency instead of one request
+  per lock all at once.
 - `ContractParam.ByteArray` is now sent as base64 across all wallet paths,
   matching the dapi spec. Fixes a "Wrong magic" FAULT when deploying via
   NeoLine, and similar failures in createLock.

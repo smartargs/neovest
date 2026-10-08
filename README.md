@@ -59,12 +59,17 @@ flowchart LR
 2. **Create a lock** — the owner calls `transfer(vault, amount, data)` on
    any NEP-17 token. The `data` payload encodes the lock parameters
    (beneficiary, schedule type, dates, category, note, revocable flag). The
-   vault's `onPayment` callback validates the parameters and creates the
-   lock atomically. One transaction. No separate approval step.
+   vault's `onPayment` callback checks the owner's witness, validates the
+   parameters and creates the lock atomically. One transaction, signed
+   with a custom-contracts scope naming the token and the vault. No
+   separate approval step.
 3. **Vest over time** — three schedule types:
    - **Cliff** — all tokens unlock on a single date.
    - **Linear** — continuous vesting between two dates, with optional cliff.
    - **Stepped** — equal tranches at evenly-spaced timestamps (1–64 tranches).
+
+   Vesting NEO itself works but strands the GAS it earns inside the vault;
+   see [`docs/SECURITY.md`](docs/SECURITY.md#known-limitations).
 4. **Claim** — the beneficiary calls `claim(lockId)`. The contract computes
    `vested - alreadyClaimed`, transfers that amount, and updates state.
    Anyone can call `vestedAmount` / `claimableAmount` to read the current

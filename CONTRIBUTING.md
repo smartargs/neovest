@@ -26,7 +26,7 @@ take the form of bug fixes, documentation improvements, or follow-ups from
 2. **Run the tests** locally:
    ```
    ./gradlew :contract:test
-   cd ui && npx tsc -b && npm run lint
+   cd ui && npm run typecheck && npm run test
    ```
    Both must pass before opening a PR.
 3. **Write a focused commit message.** Conventional Commits prefix:
@@ -74,8 +74,8 @@ instructions.
 
 ## Style
 
-- **TypeScript:** the existing code style (no semicolons in JSX, single
-  quotes, trailing commas) — `npm run lint` enforces it.
+- **TypeScript:** the existing code style (single quotes, trailing commas,
+  2-space indent); `npm run typecheck` must pass.
 - **Java:** the neow3j devpack style; 4-space indent; `Helper.abort("VV: ...")`
   for every revert path so error messages are greppable.
 - **Comments:** explain *why* something is non-obvious. Don't restate what

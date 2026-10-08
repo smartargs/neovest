@@ -10,6 +10,17 @@ Status keys:
 
 ## Contract
 
+### Surplus sweep for NEO-holding vaults — `[open]`
+
+NEO held by a vault earns GAS that the NEO contract pays to the vault; the
+vault has no withdrawal path, so that GAS is stranded (see
+`docs/SECURITY.md`). A permissionless `sweep(token)` that transfers
+`balanceOf(vault) - totalLocked(token)` to the owner would recover it
+without adding a privileged role: it can only move balances that no lock
+accounts for. It needs `balanceOf` added to the contract's permission list
+and tests covering a vault that holds NEO across several blocks. Deployed
+vaults cannot be upgraded, so this only helps future deployments.
+
 ### Migration path (`migrate(lockId, newVault)`) — `[design]`
 
 A bug in v1 severe enough to require a redeploy currently strands every

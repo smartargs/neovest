@@ -156,7 +156,9 @@ amount shown are only as trustworthy as that node.
   reports a different network (NeoLine chain id, WalletConnect chain
   reference) the dashboard covers the whole page with a blocking dialog
   until the wallet is switched or disconnected, and every write handler
-  refuses to submit.
+  refuses to submit. With NeoLine installed the extension's network is
+  read on page load as well, before any connection: the Manage and Deploy
+  pages are blocked immediately and the read-only pages show a red strip.
 - Before signing a transaction, compare the contract hash in the wallet
   prompt with the hash in the page URL, and the hash in the URL with the
   one published by the project. The dashboard cannot do that for you.

@@ -35,6 +35,9 @@ evolving.
   the build reads (NeoLine chain id or WalletConnect chain reference versus
   `VITE_NETWORK`). Claim, revoke, create-lock and deploy also refuse to
   submit while mismatched. The wallet menu shows the wallet's network.
+  With NeoLine installed the extension's network is read on page load, so
+  Manage and Deploy are blocked before connecting and read-only pages show
+  a red strip.
 - Warning on the create-lock form when the token is NEO: GAS earned by NEO
   held in the vault cannot be withdrawn.
 - Lock detail lists the individual tranches of a stepped schedule.

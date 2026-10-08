@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { isSigningPage, readOnlyPathFor } from './extension-network';
 import {
   walletMatchesApp,
   walletNetworkFromCaip,
@@ -43,5 +44,19 @@ describe('walletMatchesApp', () => {
     expect(walletMatchesApp('private', 'localnet')).toBe(true);
     expect(walletMatchesApp('mainnet', 'localnet')).toBe(false);
     expect(walletMatchesApp('unknown', 'localnet')).toBe(false);
+  });
+});
+
+describe('signing-page routing helpers', () => {
+  it('treats manage and deploy as pages that can sign', () => {
+    expect(isSigningPage('/deploy')).toBe(true);
+    expect(isSigningPage('/v/0xabc/manage')).toBe(true);
+    expect(isSigningPage('/v/0xabc')).toBe(false);
+    expect(isSigningPage('/')).toBe(false);
+  });
+
+  it('sends the user back to the read-only view of the same vault', () => {
+    expect(readOnlyPathFor('/v/0xabc/manage')).toBe('/v/0xabc');
+    expect(readOnlyPathFor('/deploy')).toBe('/');
   });
 });

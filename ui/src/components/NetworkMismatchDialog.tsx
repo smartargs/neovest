@@ -1,30 +1,41 @@
 import { useEffect, useRef } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useConnection } from '@/lib/connection';
 import { defaultNetwork } from '@/lib/rpc';
-import { networkLabel } from '@/lib/wallet-network';
+import { networkLabel, walletMatchesApp } from '@/lib/wallet-network';
+import { isSigningPage, readOnlyPathFor, useNeoLineExtensionNetwork } from '@/lib/extension-network';
 import { IconAlert } from './icons';
 
 export function NetworkMismatchDialog() {
   const { state, networkMismatch, disconnect } = useConnection();
-  const disconnectButton = useRef<HTMLButtonElement>(null);
-  const open = networkMismatch && state.status === 'connected';
+  const extension = useNeoLineExtensionNetwork();
+  const { pathname } = useLocation();
+  const primaryButton = useRef<HTMLButtonElement>(null);
+
+  const app = defaultNetwork();
+  const connected = state.status === 'connected' ? state : null;
+  const extensionMismatch = extension != null && !walletMatchesApp(extension.walletNetwork, app);
+  const open = (connected != null && networkMismatch) || (connected == null && extensionMismatch && isSigningPage(pathname));
 
   useEffect(() => {
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    disconnectButton.current?.focus();
+    primaryButton.current?.focus();
     return () => {
       document.body.style.overflow = previousOverflow;
     };
   }, [open]);
 
-  if (!open || state.status !== 'connected') return null;
+  if (!open) return null;
 
-  const appLabel = networkLabel(defaultNetwork());
-  const walletKind = state.kind === 'neoline' ? 'NeoLine' : 'WalletConnect';
-  const unknown = state.walletNetwork === 'unknown';
-  const walletLabel = networkLabel(state.walletNetwork) + (state.network ? ` ("${state.network}")` : '');
+  const appLabel = networkLabel(app);
+  const walletKind = connected ? (connected.kind === 'neoline' ? 'NeoLine' : 'WalletConnect') : 'NeoLine';
+  const walletNetwork = connected ? connected.walletNetwork : extension?.walletNetwork ?? 'unknown';
+  const rawLabel = connected ? connected.network : extension?.label ?? '';
+  const walletLabel = networkLabel(walletNetwork) + (rawLabel ? ` ("${rawLabel}")` : '');
+  const unknown = walletNetwork === 'unknown';
+  const leaveTo = readOnlyPathFor(pathname);
 
   return (
     <div
@@ -54,25 +65,30 @@ export function NetworkMismatchDialog() {
         <div style={{ fontSize: 13.5, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
           This site reads <strong style={{ color: 'var(--text-primary)' }}>{appLabel}</strong>.{' '}
           {unknown ? (
-            <>It could not determine which network {walletKind} is connected to.</>
+            <>It could not determine which network {walletKind} is set to.</>
           ) : (
             <>
-              {walletKind} is connected to{' '}
+              {walletKind} is set to{' '}
               <strong style={{ color: 'var(--text-primary)' }}>{walletLabel}</strong>.
             </>
           )}{' '}
           Anything you signed would be sent to the wallet's network, not the one shown here, so
-          the site stays blocked until the two match.
+          this page stays blocked until the two match.
         </div>
         <div style={{ fontSize: 13, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-          {state.kind === 'neoline'
-            ? <>Switch NeoLine to {appLabel}. The connection resets when the network changes; then reconnect.</>
+          {walletKind === 'NeoLine'
+            ? <>Switch NeoLine to {appLabel}. This dialog closes by itself when the network changes.</>
             : <>Disconnect, select {appLabel} in your wallet, and reconnect.</>}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-          <button ref={disconnectButton} className="btn btn-primary" onClick={() => void disconnect()}>
-            Disconnect wallet
-          </button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <Link to={leaveTo} className="btn btn-secondary">
+            Leave this page
+          </Link>
+          {connected && (
+            <button ref={primaryButton} className="btn btn-primary" onClick={() => void disconnect()}>
+              Disconnect wallet
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -132,3 +132,19 @@ export async function buildNeoLineProvider(): Promise<NeoLineProviderShape> {
 export function isNeoLineAvailable(): boolean {
   return typeof window !== 'undefined' && !!window.NEOLineN3;
 }
+
+export interface NeoLineNetworkInfo {
+  chainId: number | undefined;
+  label: string;
+}
+
+/** The network the extension is set to, read without requesting an account. */
+export async function readNeoLineNetwork(): Promise<NeoLineNetworkInfo | null> {
+  if (!isNeoLineAvailable() || !window.NEOLineN3) return null;
+  try {
+    const nets = await new window.NEOLineN3.Init().getNetworks();
+    return { chainId: nets.chainId, label: nets.defaultNetwork };
+  } catch {
+    return null;
+  }
+}
